@@ -6,6 +6,11 @@ on:
         description: Exact upstream tag
         default: v0.9.5
         required: true
+      backend:
+        description: Build all missing targets or retry one backend
+        type: choice
+        options: [all, cpu, cuda]
+        default: all
 permissions:
   contents: read
 jobs:
@@ -18,7 +23,7 @@ jobs:
             target: x86_64-apple-darwin
             backend: cpu
             extension: tar.gz
-          - runner: windows-latest
+          - runner: windows-2022
             target: x86_64-pc-windows-msvc
             backend: cuda
             extension: zip
@@ -31,8 +36,11 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
           ASSET_BASE: mistralrs-${{ matrix.backend }}-${{ matrix.target }}
+          REQUESTED_BACKEND: ${{ inputs.backend || 'all' }}
+          BACKEND: ${{ matrix.backend }}
         with:
           script: |
+            if (process.env.REQUESTED_BACKEND !== 'all' && process.env.REQUESTED_BACKEND !== process.env.BACKEND) { core.setOutput('missing', false); return; }
             if (!/^v\d+\.\d+\.\d+([-.][\w.]+)?$/.test(process.env.VERSION)) throw Error("Invalid version");
             const {data} = await github.rest.repos.getReleaseByTag({owner:"EricLBuehler",repo:"mistral.rs",tag:process.env.VERSION});
             core.setOutput("missing", !data.assets.some(a=>[".zip",".tar.gz",".tar.zst"].some(ext=>a.name===process.env.ASSET_BASE+ext)));
@@ -46,6 +54,8 @@ jobs:
         if: steps.official.outputs.missing == 'true'
       - uses: ilammy/msvc-dev-cmd@v1
         if: steps.official.outputs.missing == 'true' && matrix.backend == 'cuda'
+        with:
+          vsversion: '2022'
       - uses: Jimver/cuda-toolkit@v0.2.24
         if: steps.official.outputs.missing == 'true' && matrix.backend == 'cuda'
         with:
@@ -115,6 +125,7 @@ jobs:
           path: mistralrs-*.*
   publish:
     needs: supplement
+    if: always() && !cancelled()
     runs-on: windows-latest
     permissions:
       contents: write

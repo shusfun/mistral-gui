@@ -67,7 +67,7 @@ if args.backend == "cpu":
     command.append("--cpu")
 environment = dict(os.environ)
 environment.pop("HF_TOKEN", None)
-environment["HF_HOME"] = str(data / "hf-home")
+environment["HF_HOME"] = str(data / "hf-cache")
 started = time.monotonic()
 with (data / "engine.log").open("wb") as output:
     process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT, env=environment, cwd=engine.parent)
@@ -93,7 +93,8 @@ with (data / "engine.log").open("wb") as output:
         with urllib.request.urlopen(request, timeout=120) as response:
             result = json.load(response)
             translation = result["choices"][0]["message"]["content"]
-            if response.status != 200 or "你好" not in translation:
+            if response.status != 200 or not any(greeting in translation for greeting in ("你好", "您好")):
+                emit("inference.unexpected", translation=translation)
                 raise RuntimeError("Runtime did not return the expected translation")
             emit("inference.complete", http_status=response.status, startup_seconds=round(loaded, 3), request_seconds=round(time.monotonic()-started, 3))
     except Exception:
