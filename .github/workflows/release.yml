@@ -1,0 +1,140 @@
+name: manager-release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release tag (v0.1.0)
+        required: true
+  push:
+    tags: ["v*.*.*"]
+permissions:
+  contents: read
+env:
+  VERSION: ${{ inputs.version || github.ref_name }}
+  UPDATE_PUBLIC_KEY: ${{ vars.UPDATE_PUBLIC_KEY }}
+  SUPPLEMENT_REPOSITORY: ${{ github.repository }}
+jobs:
+  manager:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            goos: windows
+            goarch: amd64
+          - runner: macos-15-intel
+            goos: darwin
+            goarch: amd64
+          - runner: macos-15
+            goos: darwin
+            goarch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Validate release configuration
+        shell: bash
+        run: |
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test -n "$UPDATE_PUBLIC_KEY"
+      - name: Test and vet
+        shell: bash
+        run: |
+          go test ./...
+          go vet ./...
+      - name: Build manager and updater
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          ext=; gui=
+          if [ "$GOOS" = windows ]; then ext=.exe; gui="-H windowsgui"; fi
+          flags="-s -w $gui -X github.com/shusfun/mistral-gui/internal/app.Version=$VERSION -X github.com/shusfun/mistral-gui/internal/app.UpdateRepository=$GITHUB_REPOSITORY -X github.com/shusfun/mistral-gui/internal/app.SupplementRepository=$SUPPLEMENT_REPOSITORY -X github.com/shusfun/mistral-gui/internal/app.UpdatePublicKey=$UPDATE_PUBLIC_KEY"
+          go build -trimpath -ldflags="$flags" -o "dist/mistral-gui$ext" ./cmd/mistral-gui
+          go build -trimpath -ldflags="-s -w $gui" -o "dist/mistral-gui-updater$ext" ./cmd/updater
+      - name: Windows installer
+        if: matrix.goos == 'windows'
+        shell: pwsh
+        run: |
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' "/DVERSION=$($env:VERSION.TrimStart('v'))" installer/windows/setup.nsi
+          if ($LASTEXITCODE) { throw 'NSIS failed' }
+      - name: Windows installed application smoke
+        if: matrix.goos == 'windows'
+        shell: pwsh
+        run: ./installer/windows/smoke.ps1
+      - name: macOS signing identity
+        if: matrix.goos == 'darwin'
+        shell: bash
+        env:
+          MAC_CERT_BASE64: ${{ secrets.MAC_CERT_BASE64 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+        run: |
+          if [ -n "$MAC_CERT_BASE64" ]; then
+            printf %s "$MAC_CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+            security create-keychain -p temporary "$RUNNER_TEMP/build.keychain-db"
+            security set-keychain-settings -lut 21600 "$RUNNER_TEMP/build.keychain-db"
+            security unlock-keychain -p temporary "$RUNNER_TEMP/build.keychain-db"
+            security import "$RUNNER_TEMP/cert.p12" -k "$RUNNER_TEMP/build.keychain-db" -P "$MAC_CERT_PASSWORD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple: -k temporary "$RUNNER_TEMP/build.keychain-db"
+            security list-keychains -d user -s "$RUNNER_TEMP/build.keychain-db"
+          fi
+      - name: macOS DMG
+        if: matrix.goos == 'darwin'
+        shell: bash
+        env:
+          MAC_SIGN_IDENTITY: ${{ secrets.MAC_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: VERSION="${VERSION#v}" sh installer/macos/build-dmg.sh ${{ matrix.goarch }}
+      - name: Verify macOS disk image and application
+        if: matrix.goos == 'darwin'
+        shell: bash
+        run: |
+          label=x64; if [ '${{ matrix.goarch }}' = arm64 ]; then label=arm64; fi
+          hdiutil verify "dist/mistral-gui-macos-$label.dmg"
+          codesign --verify --deep --strict dist/mistral-gui.app
+          plutil -lint dist/mistral-gui.app/Contents/Info.plist
+      - name: Create update archive
+        shell: bash
+        run: go run ./cmd/release -os ${{ matrix.goos }} -arch ${{ matrix.goarch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manager-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/*-setup.exe
+            dist/*.dmg
+            dist/*.update.zip
+            dist/*.update.tar.zst
+  metadata:
+    needs: manager
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: manager-*
+          merge-multiple: true
+          path: dist
+      - name: Sign metadata
+        shell: pwsh
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: go run ./cmd/release -version $env:VERSION -repository $env:GITHUB_REPOSITORY
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:VERSION --verify-tag --generate-notes (Get-ChildItem dist -File | ForEach-Object FullName)

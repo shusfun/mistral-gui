@@ -1,0 +1,130 @@
+name: missing-mistralrs-assets
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact upstream tag
+        default: v0.9.5
+        required: true
+permissions:
+  contents: read
+jobs:
+  supplement:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            backend: cpu
+            extension: tar.gz
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            backend: cuda
+            extension: zip
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check official asset first
+        id: official
+        uses: actions/github-script@v7
+        env:
+          VERSION: ${{ inputs.version }}
+          ASSET_BASE: mistralrs-${{ matrix.backend }}-${{ matrix.target }}
+        with:
+          script: |
+            if (!/^v\d+\.\d+\.\d+([-.][\w.]+)?$/.test(process.env.VERSION)) throw Error("Invalid version");
+            const {data} = await github.rest.repos.getReleaseByTag({owner:"EricLBuehler",repo:"mistral.rs",tag:process.env.VERSION});
+            core.setOutput("missing", !data.assets.some(a=>[".zip",".tar.gz",".tar.zst"].some(ext=>a.name===process.env.ASSET_BASE+ext)));
+      - uses: actions/checkout@v4
+        if: steps.official.outputs.missing == 'true'
+        with:
+          repository: EricLBuehler/mistral.rs
+          ref: ${{ inputs.version }}
+          path: upstream
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.official.outputs.missing == 'true'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: steps.official.outputs.missing == 'true' && matrix.backend == 'cuda'
+      - uses: Jimver/cuda-toolkit@v0.2.24
+        if: steps.official.outputs.missing == 'true' && matrix.backend == 'cuda'
+        with:
+          cuda: '12.8.1'
+          method: network
+      - name: Prepare Windows CUDA compatibility and check ABI types
+        if: steps.official.outputs.missing == 'true' && matrix.backend == 'cuda'
+        shell: pwsh
+        run: |
+          python installer/runtime/windows-cuda-compat.py upstream
+          if ($LASTEXITCODE) { throw 'Windows CUDA compatibility patch failed' }
+          $env:MISTRALRS_SOURCE = (Resolve-Path upstream).Path
+          rustc --edition 2021 --emit=metadata installer/runtime/windows-cuda-abi-smoke.rs -o "$env:RUNNER_TEMP/rotary-abi.rmeta"
+          if ($LASTEXITCODE) { throw 'Windows CUDA ABI type check failed' }
+      - name: Build only missing target
+        if: steps.official.outputs.missing == 'true'
+        shell: bash
+        working-directory: upstream
+        env:
+          CARGO_BUILD_JOBS: "2"
+          CARGO_HTTP_MULTIPLEXING: "false"
+          CUDAFORGE_THREADS: "2"
+          RUSTFLAGS: "-C target-cpu=x86-64"
+          NVCC_APPEND_FLAGS: "-gencode=arch=compute_80,code=compute_80 --compiler-options=/MD"
+          CUDA_NVCC_FLAGS: "/MD"
+        run: |
+          flags=
+          if [ "${{ matrix.backend }}" = cuda ]; then
+            flags="--features cuda"
+          fi
+          export CUDA_COMPUTE_CAP=80
+          cargo build --locked --release -p mistralrs-cli --no-default-features $flags
+      - name: Package CPU
+        if: steps.official.outputs.missing == 'true' && matrix.backend == 'cpu'
+        shell: bash
+        run: |
+          mkdir -p runtime-dist
+          cp upstream/LICENSE runtime-dist/LICENSE
+          cp upstream/target/release/mistralrs runtime-dist/
+          tar -czf mistralrs-cpu-${{ matrix.target }}.tar.gz -C runtime-dist .
+      - name: Package CUDA and runtime libraries
+        if: steps.official.outputs.missing == 'true' && matrix.backend == 'cuda'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory runtime-dist
+          Copy-Item upstream/target/release/mistralrs.exe runtime-dist
+          Copy-Item upstream/LICENSE runtime-dist
+          foreach ($pattern in @('cudart64_12.dll','cublas64_12.dll','cublasLt64_12.dll','nvrtc64*.dll','nvrtc-builtins64*.dll')) {
+            Get-ChildItem "$env:CUDA_PATH/bin/$pattern" | Copy-Item -Destination runtime-dist
+          }
+          Get-ChildItem "$env:CUDA_PATH" -Filter '*EULA*' | Copy-Item -Destination runtime-dist
+          Compress-Archive runtime-dist/* mistralrs-cuda-${{ matrix.target }}.zip
+      - uses: actions/upload-artifact@v4
+        if: steps.official.outputs.missing == 'true'
+        with:
+          name: runtime-${{ matrix.backend }}
+          path: mistralrs-*.*
+  publish:
+    needs: supplement
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: runtime-*
+          path: runtime-dist
+          merge-multiple: true
+      - name: Publish independent runtime release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET_REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if (!(Test-Path runtime-dist)) { exit 0 }
+          $runtimeTag = "runtime-$env:VERSION"
+          gh release view $runtimeTag --repo $env:ASSET_REPO
+          if ($LASTEXITCODE) { gh release create $runtimeTag --repo $env:ASSET_REPO --prerelease --latest=false --title "mistral.rs $env:VERSION supplemental runtimes" --notes "Only targets missing from the corresponding upstream release. Independent from manager installers and updates." }
+          if ($LASTEXITCODE) { throw 'Runtime release creation failed' }
+          gh release upload $runtimeTag --repo $env:ASSET_REPO (Get-ChildItem runtime-dist -File | ForEach-Object FullName)
+          if ($LASTEXITCODE) { throw 'Runtime asset upload failed' }

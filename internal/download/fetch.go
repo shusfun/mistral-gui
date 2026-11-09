@@ -1,0 +1,582 @@
+// Package download streams resumable, verified assets with ordered source fallback.
+package download
+
+import (
+	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+// DefaultIdle 是默认的无数据超时。
+const DefaultIdle = 60 * time.Second
+
+// 低速换源：连续 DefaultSlowFor 低于 DefaultMinSpeed 就放弃当前来源、换下一个（与 install-online.sh 的
+// curl --speed-limit 102400 --speed-time 15 一致）。全部来源都试过后，回到只因为慢被放弃的来源里最快的那个，
+// 不再限速、从断点下完，否则全部来源都慢（或最后一个连不上）时会一个也下不完。
+const (
+	DefaultMinSpeed = 100 << 10
+	DefaultSlowFor  = 15 * time.Second
+)
+
+// ErrSlow 表示来源持续低于最低速度而被放弃；已下载的部分保留，下一个来源从断点续传。
+var ErrSlow = errors.New("download_slow_source")
+
+// Reporter 是非 HTTP 来源报告进度用的：Report 的 speed 为 0 时由 Download 按字节增量计算；
+// Stage 报告当前阶段（如「VPS 下载中」「传回中心」），阶段切换时旧进度作废。两个字段都可以为空。
+type Reporter struct {
+	Progress func(done, total, speed int64)
+	Step     func(string)
+}
+
+// Report 报告进度。
+func (r Reporter) Report(done, total, speed int64) {
+	if r.Progress != nil {
+		r.Progress(done, total, speed)
+	}
+}
+
+// Stage 报告当前阶段。
+func (r Reporter) Stage(s string) {
+	if r.Step != nil {
+		r.Step(s)
+	}
+}
+
+// Source 是一个不经 HTTP 地址的来源（如经某台 VPS 中转）：Fetch 把完整内容写到 dest，按摘要校验由 Download 负责。
+// 已下载的 .part 不能续传给这类来源，Fetch 从头写。
+type Source struct {
+	Name  string
+	Fetch func(ctx context.Context, dest string, rep Reporter) error
+	// Unmetered：来源有一段时间报不出进度（如 VPS 先自己下载、校验，再上传），不按低速换源规则放弃；
+	// 卡住与超时由 Fetch 自己判断并返回原因。
+	Unmetered bool
+	// Before 为 k+1 时排在 URLs[k] 之前（管理员可以把经某台 VPS 中转排在直连前面）；为 0 时排在全部 URLs 之后。
+	Before int
+}
+
+// step 是按顺序排好的一个来源：url 与 src 二选一。
+type step struct {
+	url string
+	src *Source
+}
+
+func (s step) name() string {
+	if s.src != nil {
+		return s.src.Name
+	}
+	return Host(s.url)
+}
+
+// steps 按 Source.Before 把 Sources 插进 URLs，顺序即尝试顺序。
+func (r Request) steps() []step {
+	var out []step
+	for k := 0; k <= len(r.URLs); k++ {
+		for i := range r.Sources {
+			b := r.Sources[i].Before
+			if b == k+1 || b == 0 && k == len(r.URLs) || b > len(r.URLs) && k == len(r.URLs) {
+				out = append(out, step{src: &r.Sources[i]})
+			}
+		}
+		if k < len(r.URLs) {
+			out = append(out, step{url: r.URLs[k]})
+		}
+	}
+	return out
+}
+
+// Progress 是下载进度；Total 未知时为 0。
+type Progress struct {
+	Done   int64  `json:"done"`
+	Total  int64  `json:"total"`
+	Speed  int64  `json:"speed"` // 字节 / 秒，平滑过的（见 speedMeter）
+	Source string `json:"source"`
+}
+
+// Request 描述一次下载。URLs 与 Sources 内容必须相同（都按 SHA256 校验），依次尝试；Sources 按 Before 插在 URLs 之间。
+// MinSpeed / SlowFor 为 0 时用默认的低速换源规则；MinSpeed < 0 关闭低速换源。
+type Request struct {
+	Headers    http.Header
+	URLs       []string
+	Sources    []Source
+	Dest       string
+	SHA256     string
+	MaxSize    int64
+	Idle       time.Duration
+	MinSpeed   int64
+	SlowFor    time.Duration
+	HTTP       *http.Client // 不要设置整体 Timeout；超时由 Idle 控制
+	OnProgress func(Progress)
+	// OnStep 报告当前阶段（连接某来源、换来源、校验摘要；空字符串表示连上了、开始传输）；旧进度在阶段切换后不再有效。
+	OnStep func(string)
+	Log    func(string)
+}
+
+func (r Request) step(s string) {
+	if r.OnStep != nil {
+		r.OnStep(s)
+	}
+}
+
+// speedMeter 算平滑过的速度：只看最近一秒的数字会乱跳，这里按约 3 秒的时间常数做指数平滑。
+type speedMeter struct {
+	last  int64
+	at    time.Time
+	value float64
+}
+
+const speedSmooth = 3.0 // 秒
+
+// sample 记下当前已传的字节数，返回速度；距上次不足 1 秒时返回之前的值，done 变小时（换阶段）重新开始。
+func (m *speedMeter) sample(done int64, now time.Time) int64 {
+	if m.at.IsZero() || done < m.last {
+		m.last, m.at, m.value = done, now, 0
+		return 0
+	}
+	el := now.Sub(m.at).Seconds()
+	if el < 1 {
+		return int64(m.value)
+	}
+	cur := float64(done-m.last) / el
+	if m.value == 0 {
+		m.value = cur
+	} else {
+		a := el / (speedSmooth + el)
+		m.value += a * (cur - m.value)
+	}
+	m.last, m.at = done, now
+	return int64(m.value)
+}
+
+// ErrDigest 表示下载内容与摘要不一致。
+var ErrDigest = errors.New("digest_mismatch")
+
+// Download 执行下载，成功后 Dest 是校验过的文件；失败时保留 .part 供下次续传（摘要不一致时删除）。
+func Download(ctx context.Context, r Request) error {
+	if len(r.SHA256) != 64 {
+		return errors.New("digest_required")
+	}
+	if r.Idle <= 0 {
+		r.Idle = DefaultIdle
+	}
+	if r.HTTP == nil {
+		r.HTTP = &http.Client{}
+	}
+	if r.Log == nil {
+		r.Log = func(string) {}
+	}
+	if r.MinSpeed == 0 {
+		r.MinSpeed = DefaultMinSpeed
+	}
+	if r.SlowFor <= 0 {
+		r.SlowFor = DefaultSlowFor
+	}
+	if ok, _ := matches(r.Dest, r.SHA256); ok {
+		r.Log("已有校验通过的文件，跳过下载")
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(r.Dest), 0o755); err != nil {
+		return err
+	}
+	steps := r.steps()
+	n := len(steps)
+	if n == 0 {
+		return errors.New("download_source_missing")
+	}
+	if n > 1 {
+		names := make([]string, 0, n)
+		for _, st := range steps {
+			names = append(names, st.name())
+		}
+		r.Log("来源顺序：" + strings.Join(names, " → "))
+	}
+	last := errors.New("download_source_missing")
+	// 只因为慢被放弃的来源里最快的一个：全部来源都试过后回到它，不再限速，从断点下完。
+	// 不能只给最后一个来源免限速：最后一个连不上时，前面那些慢但一直在下的来源就全白放弃了。
+	best, bestSpeed := -1, int64(-1)
+	for i := 0; i <= n; i++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		retry := i == n
+		if retry && best < 0 {
+			break
+		}
+		idx := i
+		if retry {
+			idx = best
+		}
+		st := steps[idx]
+		host := st.name()
+		var err error
+		switch {
+		case retry:
+			r.Log("其他来源都不可用，回到最快的 " + host + "，不再限速")
+			r.step("其他来源都不可用，回到最快的 " + host)
+		case i > 0:
+			r.Log("改用 " + host)
+			r.step("改用 " + host)
+		default:
+			r.step("连接 " + host)
+		}
+		// 只有一个来源时没有可换的，不按低速放弃。
+		limit := r.MinSpeed > 0 && n > 1 && !retry
+		started := time.Now()
+		var before int64
+		if st.src == nil {
+			before = partSize(r.Dest)
+			err = r.once(ctx, st.url, host, limit)
+			if n == 1 && err != nil && ctx.Err() == nil && !errors.Is(err, ErrSlow) {
+				// Some CDN/proxy HTTP/2 connections stall after a large transfer.
+				// Reconnect using HTTP/1.1 and retain the verified object's partial bytes.
+				retryRequest := r
+				client := *r.HTTP
+				base := client.Transport
+				if base == nil {
+					base = http.DefaultTransport
+				}
+				var transport *http.Transport
+				if configured, ok := base.(*http.Transport); ok {
+					transport = configured.Clone()
+					transport.ForceAttemptHTTP2 = false
+					transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+					if transport.TLSClientConfig == nil {
+						transport.TLSClientConfig = &tls.Config{}
+					}
+					transport.TLSClientConfig.NextProtos = []string{"http/1.1"}
+					client.Transport = transport
+				}
+				retryRequest.HTTP = &client
+				for attempt := 0; attempt < 2 && err != nil && ctx.Err() == nil; attempt++ {
+					r.step("retrying")
+					err = retryRequest.once(ctx, st.url, host, false)
+				}
+				if transport != nil {
+					transport.CloseIdleConnections()
+				}
+			}
+		} else {
+			err = r.source(ctx, *st.src, limit && !st.src.Unmetered)
+		}
+		if errors.Is(err, ErrSlow) && !retry {
+			got := partSize(r.Dest) - before
+			if st.src != nil {
+				got = partSize(r.Dest) // 非 HTTP 来源从头写
+			}
+			if sp := int64(float64(got) / time.Since(started).Seconds()); sp > bestSpeed {
+				best, bestSpeed = idx, sp
+			}
+		}
+		if err == nil {
+			r.step("校验摘要")
+			ok, sumErr := matches(r.Dest+".part", r.SHA256)
+			if sumErr == nil && ok {
+				if err = os.Rename(r.Dest+".part", r.Dest); err != nil {
+					return err
+				}
+				r.Log("下载完成，摘要校验通过")
+				return nil
+			}
+			_ = os.Remove(r.Dest + ".part")
+			err = fmt.Errorf("%s：%w", host, ErrDigest)
+		}
+		if ctx.Err() != nil {
+			r.Log("已取消，保留已下载的部分")
+			return ctx.Err()
+		}
+		r.Log(err.Error())
+		last = err
+	}
+	return last
+}
+
+// watchSlow 每秒看一次 got 的增量，连续 SlowFor 低于 MinSpeed 时调用 cancel；返回的函数报告是否因低速取消。
+func (r Request) watchSlow(ctx context.Context, cancel context.CancelFunc, got *atomic.Int64) func() bool {
+	var slow atomic.Bool
+	go func() {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		var below time.Duration
+		prev := got.Load()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+			cur := got.Load()
+			if cur-prev < r.MinSpeed {
+				below += time.Second
+			} else {
+				below = 0
+			}
+			prev = cur
+			if below >= r.SlowFor {
+				slow.Store(true)
+				cancel()
+				return
+			}
+		}
+	}()
+	return slow.Load
+}
+
+func partSize(dest string) int64 {
+	if st, err := os.Stat(dest + ".part"); err == nil {
+		return st.Size()
+	}
+	return 0
+}
+
+func (r Request) slowErr(host string, done int64) error {
+	return fmt.Errorf("%s %w：连续 %s 低于 %s/s（已下载 %s）", host, ErrSlow, r.SlowFor, Size(r.MinSpeed), Size(done))
+}
+
+// source 从非 HTTP 来源完整下载到 .part（不续传）。
+func (r Request) source(ctx context.Context, s Source, limit bool) error {
+	part := r.Dest + ".part"
+	_ = os.Remove(part)
+	ictx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var got atomic.Int64
+	slow := func() bool { return false }
+	if limit {
+		slow = r.watchSlow(ictx, cancel, &got)
+	}
+	r.Log("从 " + s.Name + " 下载")
+	var meter speedMeter
+	var mu sync.Mutex
+	err := s.Fetch(ictx, part, Reporter{
+		Progress: func(done, total, speed int64) {
+			got.Store(done)
+			mu.Lock()
+			if v := meter.sample(done, time.Now()); speed == 0 {
+				speed = v
+			}
+			mu.Unlock()
+			if r.OnProgress != nil {
+				r.OnProgress(Progress{Done: done, Total: total, Speed: speed, Source: s.Name})
+			}
+		},
+		Step: func(step string) {
+			mu.Lock()
+			meter = speedMeter{}
+			mu.Unlock()
+			r.step(step)
+		},
+	})
+	switch {
+	case err == nil:
+		return nil
+	case ctx.Err() != nil:
+		return ctx.Err()
+	case slow():
+		return r.slowErr(s.Name, got.Load())
+	}
+	return fmt.Errorf("%s：%v", s.Name, trim(err))
+}
+
+// once 从一个地址下载（或续传）到 .part；返回 nil 表示该地址已给出完整内容。limit 为真时按低速换源规则放弃。
+func (r Request) once(ctx context.Context, u, host string, limit bool) error {
+	part := r.Dest + ".part"
+	var have int64
+	if st, err := os.Stat(part); err == nil {
+		have = st.Size()
+	}
+	ictx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var got atomic.Int64
+	slow := func() bool { return false }
+	if limit {
+		slow = r.watchSlow(ictx, cancel, &got)
+	}
+	req, err := http.NewRequestWithContext(ictx, "GET", u, nil)
+	if err != nil {
+		return err
+	}
+	req.Header = r.Headers.Clone()
+	if req.Header == nil {
+		req.Header = make(http.Header)
+	}
+	if have > 0 {
+		req.Header.Set("Range", "bytes="+strconv.FormatInt(have, 10)+"-")
+	}
+	timer := time.AfterFunc(r.Idle, cancel)
+	defer timer.Stop()
+	resp, err := r.HTTP.Do(req)
+	if err != nil {
+		if ctx.Err() == nil && slow() {
+			return r.slowErr(host, have)
+		}
+		if ctx.Err() == nil && ictx.Err() != nil {
+			return fmt.Errorf("download_idle_timeout: %s (%s)", host, r.Idle)
+		}
+		return fmt.Errorf("download_connection_failed: %s: %v", host, trim(err))
+	}
+	defer resp.Body.Close()
+	var f *os.File
+	total := int64(0)
+	switch {
+	case resp.StatusCode == http.StatusPartialContent && have > 0:
+		start, size, ok := contentRange(resp.Header.Get("Content-Range"))
+		if !ok || start != have {
+			return r.restart(host, "range_offset_mismatch")
+		}
+		total = size
+		r.Log(fmt.Sprintf("%s：从 %s 处续传", host, Size(have)))
+		f, err = os.OpenFile(part, os.O_WRONLY|os.O_APPEND, 0o644)
+	case resp.StatusCode == http.StatusOK:
+		if have > 0 {
+			r.Log(host + " 不支持续传，从头下载")
+		} else {
+			r.Log("从 " + host + " 下载")
+		}
+		have = 0
+		if resp.ContentLength > 0 {
+			total = resp.ContentLength
+		}
+		f, err = os.OpenFile(part, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	case resp.StatusCode == http.StatusRequestedRangeNotSatisfiable && have > 0:
+		// 已下载完整但上次没来得及校验：交给上层校验。
+		return nil
+	default:
+		return fmt.Errorf("download_http_error: %s HTTP %d", host, resp.StatusCode)
+	}
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if r.MaxSize > 0 && total > r.MaxSize {
+		return fmt.Errorf("download_size_limit: %s (%s)", host, Size(total))
+	}
+	// 连上了：不再写「连接 ……」，来源在进度里
+	r.step("")
+	buf := make([]byte, 64<<10)
+	done, lastReport := have, time.Now()
+	meter := speedMeter{last: have, at: lastReport}
+	report := func(force bool) {
+		if r.OnProgress == nil {
+			return
+		}
+		if now := time.Now(); now.Sub(lastReport) >= time.Second || force {
+			r.OnProgress(Progress{Done: done, Total: total, Speed: meter.sample(done, now), Source: host})
+			lastReport = now
+		}
+	}
+	report(true)
+	for {
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			timer.Reset(r.Idle)
+			if _, werr := f.Write(buf[:n]); werr != nil {
+				return werr
+			}
+			done += int64(n)
+			got.Add(int64(n))
+			if r.MaxSize > 0 && done > r.MaxSize {
+				_ = f.Close()
+				_ = os.Remove(part)
+				return fmt.Errorf("download_size_limit: %s (%s)", host, Size(r.MaxSize))
+			}
+			report(false)
+		}
+		if rerr == io.EOF {
+			report(true)
+			if total > 0 && done < total {
+				return fmt.Errorf("download_interrupted: %s (%s / %s)", host, Size(done), Size(total))
+			}
+			return nil
+		}
+		if rerr != nil {
+			report(true)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if slow() {
+				return r.slowErr(host, done)
+			}
+			if ictx.Err() != nil {
+				return fmt.Errorf("download_idle_timeout: %s (%s, %s received)", host, r.Idle, Size(done))
+			}
+			return fmt.Errorf("download_interrupted: %s (%s received): %v", host, Size(done), trim(rerr))
+		}
+	}
+}
+
+func (r Request) restart(host, why string) error {
+	_ = os.Remove(r.Dest + ".part")
+	return fmt.Errorf("download_range_invalid: %s %s; retry without partial file", host, why)
+}
+
+// contentRange 解析 "bytes 100-199/1000"。
+func contentRange(v string) (start, size int64, ok bool) {
+	v = strings.TrimPrefix(v, "bytes ")
+	dash, slash := strings.IndexByte(v, '-'), strings.IndexByte(v, '/')
+	if dash <= 0 || slash <= dash {
+		return 0, 0, false
+	}
+	start, err1 := strconv.ParseInt(v[:dash], 10, 64)
+	size, err2 := strconv.ParseInt(v[slash+1:], 10, 64)
+	if v[slash+1:] == "*" {
+		size, err2 = 0, nil
+	}
+	return start, size, err1 == nil && err2 == nil
+}
+
+func matches(path, want string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err = io.Copy(h, f); err != nil {
+		return false, err
+	}
+	return hex.EncodeToString(h.Sum(nil)) == strings.ToLower(want), nil
+}
+
+// Host 返回地址的主机名，用于日志。
+func Host(u string) string {
+	if p, err := url.Parse(u); err == nil && p.Host != "" {
+		return p.Host
+	}
+	return u
+}
+
+// Size 把字节数写成人看的大小。
+func Size(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.1f GB", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.0f KB", float64(n)/(1<<10))
+	}
+	return fmt.Sprintf("%d B", n)
+}
+
+func trim(err error) string {
+	var uerr *url.Error
+	if errors.As(err, &uerr) {
+		err = uerr.Err
+	}
+	s := err.Error()
+	if len(s) > 200 {
+		s = s[:200] + "…"
+	}
+	return s
+}
