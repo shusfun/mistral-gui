@@ -1,9 +1,10 @@
 package update
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -25,6 +26,7 @@ type ApplyRequest struct {
 	Version          string   `json:"version"`
 	PreviousInstance string   `json:"previous_instance"`
 	StateFile        string   `json:"state_file"`
+	Traceparent      string   `json:"traceparent,omitempty"`
 }
 
 // Apply executes from a copied helper outside the install tree.
@@ -33,13 +35,24 @@ func Apply(r ApplyRequest) error {
 	if err := validateRequest(r); err != nil {
 		return err
 	}
+	if r.Traceparent == "" {
+		var id [24]byte
+		if _, err := rand.Read(id[:]); err != nil {
+			return err
+		}
+		r.Traceparent = "00-" + hex.EncodeToString(id[:16]) + "-" + hex.EncodeToString(id[16:]) + "-01"
+	}
 	if r.ParentPID > 0 {
 		if err := waitParent(r.ParentPID); err != nil {
 			return err
 		}
 	}
 	result := func(state string, e error) {
-		b, _ := json.Marshal(map[string]any{"state": state, "error": fmt.Sprint(e), "version": r.Version})
+		detail := ""
+		if e != nil {
+			detail = e.Error()
+		}
+		b, _ := json.Marshal(map[string]any{"state": state, "error": detail, "version": r.Version, "traceparent": r.Traceparent, "trace_id": r.Traceparent[3:35]})
 		_ = os.WriteFile(r.StateFile, b, 0600)
 	}
 	result("installing", nil)
@@ -84,7 +97,12 @@ func Apply(r ApplyRequest) error {
 	}
 	client := http.Client{Timeout: time.Second}
 	for i := 0; i < 60; i++ {
-		resp, e := client.Get(r.HealthURL)
+		req, e := http.NewRequest("GET", r.HealthURL, nil)
+		if e != nil {
+			return rollback(e)
+		}
+		req.Header.Set("traceparent", r.Traceparent)
+		resp, e := client.Do(req)
 		if e == nil {
 			var h struct {
 				Version  string `json:"version"`
@@ -106,6 +124,9 @@ func Apply(r ApplyRequest) error {
 	return rollback(errors.New("update_health_check_failed"))
 }
 func validateRequest(r ApplyRequest) error {
+	if r.Traceparent != "" && !validApplyTrace(r.Traceparent) {
+		return errors.New("invalid_update_trace")
+	}
 	u, e := url.Parse(r.HealthURL)
 	if e != nil || u.Scheme != "http" || u.Path != "/healthz" || u.User != nil || u.RawQuery != "" || net.ParseIP(u.Hostname()) == nil || !net.ParseIP(u.Hostname()).IsLoopback() {
 		return errors.New("invalid_health_url")
@@ -124,4 +145,16 @@ func validateRequest(r ApplyRequest) error {
 		}
 	}
 	return nil
+}
+
+func validApplyTrace(trace string) bool {
+	if len(trace) != 55 || trace[:3] != "00-" || trace[35] != '-' || trace[52] != '-' {
+		return false
+	}
+	for _, part := range []string{trace[3:35], trace[36:52], trace[53:]} {
+		if _, err := hex.DecodeString(part); err != nil || part != strings.ToLower(part) {
+			return false
+		}
+	}
+	return trace[3:35] != strings.Repeat("0", 32) && trace[36:52] != strings.Repeat("0", 16)
 }

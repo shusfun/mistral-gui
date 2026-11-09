@@ -128,7 +128,7 @@ bind("copy-token",async()=>{await navigator.clipboard.writeText($("token").value
 bind("reveal-token",()=>{$("token").type=$("token").type==="password"?"text":"password";return Promise.resolve()});
 bind("rotate-token",async()=>{if(confirm(t("confirmRotate"))){const d=await api("/api/v1/token/rotate",{});$("token").value=d.token}});
 bind("export",async()=>{const d=await api("/api/v1/diagnostics"),a=document.createElement("a"),url=URL.createObjectURL(new Blob([JSON.stringify(d,null,2)],{type:"application/json"}));a.href=url;a.download="mistral-gui-diagnostics.json";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)});
-bind("check-update",async()=>{const d=await api("/api/v1/update/check",{});updateAvailable=d.available;$("update-info").textContent=d.available?d.manifest.version+" · "+(d.manifest.notes||""):t("noUpdate");$("install-update").disabled=!d.available});
+bind("check-update",async()=>{const d=await api("/api/v1/update/check",{});updateAvailable=d.available;$("update-info").textContent=d.available?[d.manifest.version,d.manifest.notes].filter(Boolean).join(" · "):t("noUpdate");$("install-update").disabled=!d.available});
 bind("install-update",()=>api("/api/v1/update/install",{}));
 bind("quit",async()=>{await api("/api/v1/manager/quit",{});stream?.close();notice(t("stopped"))});
 $("language").onchange=()=>{language($("language").value);api("/api/v1/settings",{language:lang}).then(load).catch(()=>{})};

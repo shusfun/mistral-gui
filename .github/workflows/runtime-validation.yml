@@ -1,0 +1,27 @@
+name: native-runtime-validation
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Upstream version with published supplemental assets
+        default: v0.9.5
+        required: true
+permissions:
+  contents: read
+jobs:
+  intel-model:
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download independent Intel CPU runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][a-zA-Z0-9.]+)?$ ]]
+          gh release download "runtime-$VERSION" --pattern mistralrs-cpu-x86_64-apple-darwin.tar.gz --dir "$RUNNER_TEMP/runtime"
+          tar -xzf "$RUNNER_TEMP/runtime/mistralrs-cpu-x86_64-apple-darwin.tar.gz" -C "$RUNNER_TEMP/runtime"
+          chmod +x "$RUNNER_TEMP/runtime/mistralrs"
+      - name: Load HY-MT and translate on Intel CPU
+        run: python3 installer/runtime/model-smoke.py --engine "$RUNNER_TEMP/runtime/mistralrs" --backend cpu --data-dir "$RUNNER_TEMP/hy-mt-smoke"

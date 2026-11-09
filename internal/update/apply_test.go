@@ -82,7 +82,8 @@ func TestApplyHealthAndRollback(t *testing.T) {
 				}
 			})
 			stateFile := filepath.Join(dir, "update-status.json")
-			e = Apply(ApplyRequest{Target: target, Staged: target + ".next", Executable: executable, Args: []string{"--addr", addr, "--data-dir", data, "--no-open"}, HealthURL: "http://" + addr + "/healthz", Version: "v9.0.0", StateFile: stateFile})
+			trace := "00-11111111111111111111111111111111-2222222222222222-01"
+			e = Apply(ApplyRequest{Target: target, Staged: target + ".next", Executable: executable, Args: []string{"--addr", addr, "--data-dir", data, "--no-open"}, HealthURL: "http://" + addr + "/healthz", Version: "v9.0.0", StateFile: stateFile, Traceparent: trace})
 			if success && e != nil || !success && e == nil {
 				t.Fatalf("unexpected apply result: %v", e)
 			}
@@ -109,6 +110,27 @@ func TestApplyHealthAndRollback(t *testing.T) {
 			if !strings.Contains(string(b), want) {
 				t.Fatalf("missing state: %s", b)
 			}
+			var result struct {
+				Traceparent string
+				Error       string
+			}
+			if err := json.Unmarshal(b, &result); err != nil || result.Traceparent != trace || success && result.Error != "" {
+				t.Fatalf("update correlation/result: %s %v", b, err)
+			}
+			if success {
+				logs, err := os.ReadFile(filepath.Join(data, "manager.log"))
+				if err != nil || !strings.Contains(string(logs), `"traceId":"11111111111111111111111111111111"`) {
+					t.Fatalf("new manager health trace missing: %s %v", logs, err)
+				}
+			}
 		})
+	}
+}
+
+func TestApplyTraceValidation(t *testing.T) {
+	for _, input := range []string{"x", "00-00000000000000000000000000000000-2222222222222222-01", "00-11111111111111111111111111111111-0000000000000000-01", "00-1111111111111111111111111111111z-2222222222222222-01"} {
+		if err := validateRequest(ApplyRequest{Traceparent: input}); err == nil || err.Error() != "invalid_update_trace" {
+			t.Fatalf("accepted invalid trace %q: %v", input, err)
+		}
 	}
 }

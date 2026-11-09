@@ -119,7 +119,7 @@ func (a *App) updateInstall(w http.ResponseWriter, r *http.Request) {
 		if e = os.WriteFile(helper, b, 0700); e != nil {
 			return e
 		}
-		req := update.ApplyRequest{ParentPID: os.Getpid(), PreviousInstance: a.instance(), Target: target, Staged: stage, Executable: exe, Args: []string{"--addr", a.addr, "--data-dir", a.dataDir, "--no-open"}, HealthURL: "http://" + a.addr + "/healthz", Version: m.Version, StateFile: filepath.Join(a.dataDir, "update-status.json")}
+		req := update.ApplyRequest{ParentPID: os.Getpid(), PreviousInstance: a.instance(), Target: target, Staged: stage, Executable: exe, Args: []string{"--addr", a.addr, "--data-dir", a.dataDir, "--no-open"}, HealthURL: "http://" + a.addr + "/healthz", Version: m.Version, StateFile: filepath.Join(a.dataDir, "update-status.json"), Traceparent: a.operationTrace(id)}
 		b, _ = json.Marshal(req)
 		request := filepath.Join(a.dataDir, "updates", "apply.json")
 		if e = os.WriteFile(request, b, 0600); e != nil {
