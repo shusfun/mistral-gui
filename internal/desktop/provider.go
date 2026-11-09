@@ -12,6 +12,7 @@ import (
 	gh "github.com/wailsapp/wails/v3/pkg/updater/providers/github"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,8 +20,9 @@ import (
 )
 
 type provider struct {
-	official *gh.Provider
-	manager  *app.App
+	official   *gh.Provider
+	manager    *app.App
+	repository string
 }
 
 type downloadTraceKey struct{}
@@ -51,7 +53,7 @@ func newProvider(a *app.App) (*provider, error) {
 	if e != nil {
 		return nil, e
 	}
-	return &provider{p, a}, nil
+	return &provider{p, a, app.UpdateRepository}, nil
 }
 func (p *provider) Name() string { return "github-signed-resumable" }
 func (p *provider) Check(ctx context.Context, r updater.CheckRequest) (*updater.Release, error) {
@@ -65,6 +67,10 @@ func (p *provider) Check(ctx context.Context, r updater.CheckRequest) (*updater.
 	raw, ok := rel.Metadata["github.asset.url"].(string)
 	if !ok {
 		return nil, errors.New("update_asset_missing")
+	}
+	if p.repository != "" {
+		raw = "https://github.com/" + p.repository + "/releases/download/" + url.PathEscape("v"+strings.TrimPrefix(rel.Version, "v")) + "/" + url.PathEscape(rel.Artifact.Filename)
+		rel.Metadata["github.asset.url"] = raw
 	}
 	req, e := http.NewRequestWithContext(ctx, "GET", raw+".sig", nil)
 	if e != nil {
