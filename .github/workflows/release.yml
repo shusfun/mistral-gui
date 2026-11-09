@@ -58,6 +58,12 @@ jobs:
           flags="-s -w $gui -X github.com/shusfun/mistral-gui/internal/app.Version=$VERSION -X github.com/shusfun/mistral-gui/internal/app.UpdateRepository=$GITHUB_REPOSITORY -X github.com/shusfun/mistral-gui/internal/app.SupplementRepository=$SUPPLEMENT_REPOSITORY -X github.com/shusfun/mistral-gui/internal/app.UpdatePublicKey=$UPDATE_PUBLIC_KEY"
           go build -trimpath -ldflags="$flags" -o "dist/mistral-gui$ext" ./cmd/mistral-gui
           go build -trimpath -ldflags="-s -w $gui" -o "dist/mistral-gui-updater$ext" ./cmd/updater
+      - name: Install Windows packaging tools
+        if: matrix.goos == 'windows'
+        shell: pwsh
+        run: |
+          choco install nsis --version=3.11 --yes --no-progress
+          if ($LASTEXITCODE) { throw 'NSIS installation failed' }
       - name: Windows installer
         if: matrix.goos == 'windows'
         shell: pwsh
@@ -101,6 +107,7 @@ jobs:
           hdiutil verify "dist/mistral-gui-macos-$label.dmg"
           codesign --verify --deep --strict dist/mistral-gui.app
           plutil -lint dist/mistral-gui.app/Contents/Info.plist
+          sh installer/macos/smoke.sh "dist/mistral-gui-macos-$label.dmg"
       - name: Create update archive
         shell: bash
         run: go run ./cmd/release -os ${{ matrix.goos }} -arch ${{ matrix.goarch }}
