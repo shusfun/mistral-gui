@@ -61,7 +61,7 @@ jobs:
           rustc --edition 2021 --emit=metadata installer/runtime/windows-cuda-abi-smoke.rs -o "$env:RUNNER_TEMP/rotary-abi.rmeta"
           if ($LASTEXITCODE) { throw 'Windows CUDA ABI type check failed' }
       - name: Build only missing target
-        if: steps.official.outputs.missing == 'true'
+        if: steps.official.outputs.missing == 'true' && matrix.backend == 'cpu'
         shell: bash
         working-directory: upstream
         env:
@@ -69,15 +69,25 @@ jobs:
           CARGO_HTTP_MULTIPLEXING: "false"
           CUDAFORGE_THREADS: "2"
           RUSTFLAGS: "-C target-cpu=x86-64"
+        run: |
+          cargo build --locked --release -p mistralrs-cli --no-default-features
+      - name: Build missing Windows CUDA runtime
+        if: steps.official.outputs.missing == 'true' && matrix.backend == 'cuda'
+        shell: pwsh
+        working-directory: upstream
+        env:
+          CARGO_BUILD_JOBS: "2"
+          CARGO_HTTP_MULTIPLEXING: "false"
+          CUDAFORGE_THREADS: "2"
+          RUSTFLAGS: "-C target-cpu=x86-64"
+          CUDA_COMPUTE_CAP: "80"
           NVCC_APPEND_FLAGS: "-gencode=arch=compute_80,code=compute_80 --compiler-options=/MD"
           CUDA_NVCC_FLAGS: "/MD"
         run: |
-          flags=
-          if [ "${{ matrix.backend }}" = cuda ]; then
-            flags="--features cuda"
-          fi
-          export CUDA_COMPUTE_CAP=80
-          cargo build --locked --release -p mistralrs-cli --no-default-features $flags
+          $linker = (Get-Command link.exe).Source
+          if ($linker -notmatch 'Visual Studio') { throw "MSVC linker required, got: $linker" }
+          cargo build --locked --release -p mistralrs-cli --no-default-features --features cuda
+          if ($LASTEXITCODE) { throw 'Windows CUDA build failed' }
       - name: Package CPU
         if: steps.official.outputs.missing == 'true' && matrix.backend == 'cpu'
         shell: bash
