@@ -32,7 +32,7 @@ type Repository struct {
 }
 
 var Repositories = []Repository{
-	{ModelRepo, "HY-MT", "gguf", true}, {"tencent/HY-MT1.5-1.8B", "HY-MT", "safetensors", true},
+	{ModelRepo, "HY-MT", "gguf", true},
 	{"Qwen/Qwen3-0.6B-GGUF", "Qwen3", "gguf", true}, {"Qwen/Qwen3-1.7B-GGUF", "Qwen3", "gguf", true}, {"Qwen/Qwen3-4B-GGUF", "Qwen3", "gguf", true}, {"Qwen/Qwen3-8B-GGUF", "Qwen3", "gguf", true},
 	{"Qwen/Qwen3-0.6B", "Qwen3", "safetensors", true}, {"Qwen/Qwen3-1.7B", "Qwen3", "safetensors", true}, {"Qwen/Qwen3-4B", "Qwen3", "safetensors", true}, {"Qwen/Qwen3-8B", "Qwen3", "safetensors", true},
 	{"HuggingFaceTB/SmolLM3-3B", "SmolLM3", "safetensors", true}, {"unsloth/SmolLM3-3B-GGUF", "SmolLM3", "gguf", true},
