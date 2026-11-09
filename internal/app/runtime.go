@@ -52,7 +52,19 @@ func (w startupOutput) Write(b []byte) (int, error) {
 }
 
 func (a *App) ensureEngine(ctx context.Context, trace string) error {
+	if a.parent != nil {
+		installed := a.parent.installedSnapshot()
+		a.mu.Lock()
+		a.installed = installed
+		a.mu.Unlock()
+	}
 	a.lifecycle.Lock()
+	select {
+	case <-a.closed:
+		a.lifecycle.Unlock()
+		return errors.New("manager_stopped")
+	default:
+	}
 	a.mu.Lock()
 	p := a.engine
 	if p == nil {
@@ -101,13 +113,63 @@ func (a *App) ensureEngine(ctx context.Context, trace string) error {
 			a.lifecycle.Unlock()
 			return errors.New("engine_missing")
 		}
+		if _, err := os.Stat(modelPath); err != nil {
+			a.state.State, a.state.Error, a.state.Detail = "failed", "model_not_installed", err.Error()
+			a.mu.Unlock()
+			a.lifecycle.Unlock()
+			return errors.New("model_not_installed")
+		}
 		a.mu.Unlock()
 		port, err := freePort()
 		if err != nil {
 			a.lifecycle.Unlock()
 			return err
 		}
-		args := []string{"serve", "--host", "127.0.0.1", "--port", strconv.Itoa(port), "-f", modelPath, "--hf-cache", filepath.Join(a.dataDir, "hf-cache"), "--max-seqs", "4", "--max-model-len", "4096", "--disable-access-log"}
+		a.mu.Lock()
+		tuning := a.config.Tuning
+		in, _ := a.modelLocked(model, a.config.ModelVersion)
+		a.mu.Unlock()
+		if tuning.Context == 0 {
+			tuning.Context = 4096
+		}
+		if tuning.Sequences == 0 {
+			tuning.Sequences = 4
+		}
+		args := []string{"serve", "--host", "127.0.0.1", "--port", strconv.Itoa(port), "--hf-cache", filepath.Join(a.dataDir, "hf-cache"), "--max-seqs", strconv.Itoa(tuning.Sequences), "--disable-access-log"}
+		if in.Format == "safetensors" {
+			overrides, _ := json.Marshal(map[string]int{"max_position_embeddings": tuning.Context})
+			args = append(args, "--format", "plain", "-m", modelPath, "--hf-overrides", string(overrides))
+			if tuning.ISQ != "" {
+				args = append(args, "--isq", strings.ToLower(tuning.ISQ))
+			}
+		} else {
+			args = append(args, "--max-model-len", strconv.Itoa(tuning.Context))
+			if len(in.Files) > 1 {
+				paths := make([]string, 0, len(in.Files))
+				root := filepath.Dir(modelPath)
+				// modelPath is the first shard; files retain their repository-relative paths.
+				for range strings.Split(in.Files[0].Path, "/")[1:] {
+					root = filepath.Dir(root)
+				}
+				for _, file := range in.Files {
+					paths = append(paths, filepath.Join(root, filepath.FromSlash(file.Path)))
+				}
+				modelPath = strings.Join(paths, ";")
+			}
+			args = append(args, "-f", modelPath)
+		}
+		if tuning.GPU > 0 && backend != "cpu" {
+			args = append(args, "--device-layers", "0:"+strconv.Itoa(tuning.GPU))
+		}
+		if tuning.GPUUtil > 0 && backend != "cpu" {
+			args = append(args, "--gpu-memory-utilization", strconv.FormatFloat(tuning.GPUUtil, 'f', 2, 64))
+		}
+		if tuning.KVCache != "" && backend != "cpu" {
+			args = append(args, "--kv-cache", tuning.KVCache)
+		}
+		if tuning.BatchTokens > 0 {
+			args = append(args, "--max-num-batched-tokens", strconv.Itoa(tuning.BatchTokens))
+		}
 		if strings.HasPrefix(model, "HY-MT") {
 			args = append(args, "--tok-model-id", "tencent/HY-MT1.5-1.8B")
 		}
@@ -283,6 +345,9 @@ func (a *App) idleLoop() {
 		case <-a.closed:
 			return
 		case <-t.C:
+			for _, child := range a.children() {
+				child.stop(true)
+			}
 			a.mu.Lock()
 			idle := a.isIdle()
 			a.mu.Unlock()
@@ -338,7 +403,7 @@ func (a *App) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 		var model string
 		_ = json.Unmarshal(payload["model"], &model)
-		if model == a.stateSnapshot().Model {
+		if model == a.stateSnapshot().Model || model == a.deploymentID {
 			payload["model"], _ = json.Marshal(p.modelID)
 			body, _ = json.Marshal(payload)
 		}

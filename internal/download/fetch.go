@@ -3,6 +3,7 @@ package download
 
 import (
 	"context"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
@@ -113,6 +114,7 @@ type Request struct {
 	Sources    []Source
 	Dest       string
 	SHA256     string
+	GitSHA1    string
 	MaxSize    int64
 	Idle       time.Duration
 	MinSpeed   int64
@@ -163,9 +165,20 @@ func (m *speedMeter) sample(done int64, now time.Time) int64 {
 // ErrDigest 表示下载内容与摘要不一致。
 var ErrDigest = errors.New("digest_mismatch")
 
+func VerifyFile(path, sha256, gitSHA1 string) error {
+	ok, err := (Request{SHA256: sha256, GitSHA1: gitSHA1}).matches(path)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrDigest
+	}
+	return nil
+}
+
 // Download 执行下载，成功后 Dest 是校验过的文件；失败时保留 .part 供下次续传（摘要不一致时删除）。
 func Download(ctx context.Context, r Request) error {
-	if len(r.SHA256) != 64 {
+	if len(r.SHA256) != 64 && len(r.GitSHA1) != 40 {
 		return errors.New("digest_required")
 	}
 	if r.Idle <= 0 {
@@ -183,7 +196,7 @@ func Download(ctx context.Context, r Request) error {
 	if r.SlowFor <= 0 {
 		r.SlowFor = DefaultSlowFor
 	}
-	if ok, _ := matches(r.Dest, r.SHA256); ok {
+	if ok, _ := r.matches(r.Dest); ok {
 		r.Log("已有校验通过的文件，跳过下载")
 		return nil
 	}
@@ -281,7 +294,7 @@ func Download(ctx context.Context, r Request) error {
 		}
 		if err == nil {
 			r.step("校验摘要")
-			ok, sumErr := matches(r.Dest+".part", r.SHA256)
+			ok, sumErr := r.matches(r.Dest + ".part")
 			if sumErr == nil && ok {
 				if err = os.Rename(r.Dest+".part", r.Dest); err != nil {
 					return err
@@ -546,6 +559,27 @@ func matches(path, want string) (bool, error) {
 		return false, err
 	}
 	return hex.EncodeToString(h.Sum(nil)) == strings.ToLower(want), nil
+}
+
+func (r Request) matches(path string) (bool, error) {
+	if len(r.SHA256) == 64 {
+		return matches(path, r.SHA256)
+	}
+	f, e := os.Open(path)
+	if e != nil {
+		return false, e
+	}
+	defer f.Close()
+	info, e := f.Stat()
+	if e != nil {
+		return false, e
+	}
+	h := sha1.New()
+	fmt.Fprintf(h, "blob %d\x00", info.Size())
+	if _, e = io.Copy(h, f); e != nil {
+		return false, e
+	}
+	return hex.EncodeToString(h.Sum(nil)) == strings.ToLower(r.GitSHA1), nil
 }
 
 // Host 返回地址的主机名，用于日志。

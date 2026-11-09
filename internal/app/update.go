@@ -23,6 +23,18 @@ func (a *App) manifest(ctx context.Context) (update.Manifest, error) {
 	return update.FetchSigned(ctx, &http.Client{Timeout: 30 * time.Second}, "https://github.com/"+UpdateRepository+"/releases/latest/download/release-manifest.json", UpdatePublicKey)
 }
 func (a *App) updateCheck(w http.ResponseWriter, r *http.Request) {
+	a.mu.Lock()
+	desktop := a.desktop
+	a.mu.Unlock()
+	if desktop != nil {
+		v, e := desktop.CheckUpdate(r.Context())
+		if e != nil {
+			fail(w, 502, e.Error())
+			return
+		}
+		writeJSON(w, 200, v)
+		return
+	}
 	m, e := a.manifest(r.Context())
 	if e != nil {
 		fail(w, 502, e.Error())
@@ -31,6 +43,13 @@ func (a *App) updateCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"current": Version, "available": update.IsNewer(Version, m.Version), "manifest": m})
 }
 func (a *App) updateInstall(w http.ResponseWriter, r *http.Request) {
+	a.mu.Lock()
+	desktop := a.desktop
+	a.mu.Unlock()
+	if desktop != nil {
+		fail(w, 409, "desktop_action_required")
+		return
+	}
 	a.taskStart.Lock()
 	defer a.taskStart.Unlock()
 	a.mu.Lock()

@@ -15,17 +15,20 @@ const ModelRepo = "tencent/HY-MT1.5-1.8B-GGUF"
 const DefaultModel = "HY-MT1.5-1.8B-Q4_K_M.gguf"
 
 type Asset struct {
-	ID      string `json:"id"`
-	Kind    string `json:"kind"`
-	Version string `json:"version"`
-	OS      string `json:"os"`
-	Arch    string `json:"arch"`
-	Backend string `json:"backend"`
-	URL     string `json:"url"`
-	SHA256  string `json:"sha256"`
-	Size    int64  `json:"size"`
-	Source  string `json:"source"`
-	Name    string `json:"name"`
+	Repository string      `json:"repository,omitempty"`
+	Format     string      `json:"format,omitempty"`
+	Files      []ModelFile `json:"files,omitempty"`
+	ID         string      `json:"id"`
+	Kind       string      `json:"kind"`
+	Version    string      `json:"version"`
+	OS         string      `json:"os"`
+	Arch       string      `json:"arch"`
+	Backend    string      `json:"backend"`
+	URL        string      `json:"url"`
+	SHA256     string      `json:"sha256"`
+	Size       int64       `json:"size"`
+	Source     string      `json:"source"`
+	Name       string      `json:"name"`
 }
 type Release struct {
 	Tag    string `json:"tag_name"`

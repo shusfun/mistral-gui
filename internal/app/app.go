@@ -27,19 +27,21 @@ var SupplementTagPrefix = "runtime-"
 var UpdatePublicKey = ""
 
 type Config struct {
-	Token                string   `json:"token"`
-	Language             string   `json:"language"`
-	Backend              string   `json:"backend"`
-	Model                string   `json:"model"`
-	ModelVersion         string   `json:"model_version,omitempty"`
-	PreviousModel        string   `json:"previous_model"`
-	PreviousModelVersion string   `json:"previous_model_version,omitempty"`
-	AutoStart            bool     `json:"auto_start"`
-	IdleMinutes          int      `json:"idle_minutes"`
-	Mirrors              []string `json:"mirrors"`
-	Engine               string   `json:"engine"`
-	PreviousEngine       string   `json:"previous_engine"`
-	EngineVersion        string   `json:"engine_version"`
+	Deployments          []Deployment `json:"deployments,omitempty"`
+	Tuning               Tuning       `json:"tuning"`
+	Token                string       `json:"token"`
+	Language             string       `json:"language"`
+	Backend              string       `json:"backend"`
+	Model                string       `json:"model"`
+	ModelVersion         string       `json:"model_version,omitempty"`
+	PreviousModel        string       `json:"previous_model"`
+	PreviousModelVersion string       `json:"previous_model_version,omitempty"`
+	AutoStart            bool         `json:"auto_start"`
+	IdleMinutes          int          `json:"idle_minutes"`
+	Mirrors              []string     `json:"mirrors"`
+	Engine               string       `json:"engine"`
+	PreviousEngine       string       `json:"previous_engine"`
+	EngineVersion        string       `json:"engine_version"`
 }
 type State struct {
 	State       string    `json:"state"`
@@ -54,25 +56,30 @@ type State struct {
 	DegradedCPU bool      `json:"degraded_cpu,omitempty"`
 }
 type Operation struct {
-	Detail    string    `json:"detail,omitempty"`
-	AssetKind string    `json:"asset_kind,omitempty"`
-	AssetID   string    `json:"asset_id,omitempty"`
-	Source    string    `json:"source,omitempty"`
-	ID        string    `json:"id"`
-	Kind      string    `json:"kind"`
-	State     string    `json:"state"`
-	Progress  int64     `json:"progress"`
-	Total     int64     `json:"total"`
-	Step      string    `json:"step"`
-	Error     string    `json:"error,omitempty"`
-	TraceID   string    `json:"trace_id"`
-	UpdatedAt time.Time `json:"updated_at"`
+	DeploymentID string    `json:"deployment_id,omitempty"`
+	Detail       string    `json:"detail,omitempty"`
+	AssetKind    string    `json:"asset_kind,omitempty"`
+	AssetID      string    `json:"asset_id,omitempty"`
+	Source       string    `json:"source,omitempty"`
+	ID           string    `json:"id"`
+	Kind         string    `json:"kind"`
+	State        string    `json:"state"`
+	Progress     int64     `json:"progress"`
+	Total        int64     `json:"total"`
+	Step         string    `json:"step"`
+	Error        string    `json:"error,omitempty"`
+	TraceID      string    `json:"trace_id"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 type Installed struct {
 	catalog.Asset
 	Path string `json:"path"`
 }
 type App struct {
+	parent                   *App
+	deploymentID             string
+	deployments              map[string]*App
+	desktop                  Desktop
 	mu                       sync.Mutex
 	persist                  sync.Mutex
 	lifecycle                sync.Mutex
@@ -118,7 +125,7 @@ func New(addr, dir string) (*App, error) {
 	if err = os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	a := &App{addr: addr, dataDir: dir, statePath: filepath.Join(dir, "state.json"), cancels: map[string]context.CancelFunc{}, closed: make(chan struct{}), client: &http.Client{}, state: State{State: "stopped", UpdatedAt: time.Now().UTC()}}
+	a := &App{addr: addr, dataDir: dir, statePath: filepath.Join(dir, "state.json"), cancels: map[string]context.CancelFunc{}, deployments: map[string]*App{}, closed: make(chan struct{}), client: &http.Client{}, state: State{State: "stopped", UpdatedAt: time.Now().UTC()}}
 	a.catalog = catalog.Client{HTTP: &http.Client{Timeout: 30 * time.Second}, SupplementTagPrefix: SupplementTagPrefix}
 	a.instanceID = randomToken()[:16]
 	a.config = Config{Token: randomToken(), Backend: "auto", Model: catalog.DefaultModel, AutoStart: true, IdleMinutes: 10}
@@ -141,6 +148,7 @@ func New(addr, dir string) (*App, error) {
 	if a.config.Token == "" {
 		a.config.Token = randomToken()
 	}
+	a.restoreDeployments()
 	for i := range a.operations {
 		if a.operations[i].State == "running" {
 			a.operations[i].State = "interrupted"
@@ -153,6 +161,9 @@ func New(addr, dir string) (*App, error) {
 	return a, nil
 }
 func (a *App) save() error {
+	if a.parent != nil {
+		return nil
+	}
 	a.persist.Lock()
 	defer a.persist.Unlock()
 	a.mu.Lock()
@@ -173,8 +184,19 @@ func (a *App) save() error {
 }
 func (a *App) token() string        { a.mu.Lock(); defer a.mu.Unlock(); return a.config.Token }
 func (a *App) stateSnapshot() State { a.mu.Lock(); defer a.mu.Unlock(); return a.state }
+
+var UpdateTransaction string
+
 func (a *App) health(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"ok": true, "service": "mistral-gui", "version": Version, "instance": a.instance()})
+	a.mu.Lock()
+	desktop := a.desktop
+	a.mu.Unlock()
+	ready := desktop == nil || desktop.Ready()
+	status := 200
+	if !ready {
+		status = 503
+	}
+	writeJSON(w, status, map[string]any{"ok": ready, "service": "mistral-gui", "version": Version, "instance": a.instance(), "pid": os.Getpid(), "update_transaction": UpdateTransaction})
 }
 func (a *App) instance() string { return a.instanceID }
 func (a *App) Serve() error {
@@ -203,6 +225,9 @@ func (a *App) ServeListener(l net.Listener) error {
 func (a *App) Close() {
 	a.closeOnce.Do(func() {
 		close(a.closed)
+		for _, child := range a.children() {
+			child.stopEngine()
+		}
 		a.stopEngine()
 		a.mu.Lock()
 		for _, c := range a.cancels {
@@ -237,7 +262,10 @@ func (a *App) operation(kind, trace string, run func(context.Context, string) er
 	a.mu.Unlock()
 	_ = a.save()
 	go func() {
+		started := time.Now()
+		slog.Info("operation.start", "traceId", traceRoot(trace), "operation", op.ID, "kind", kind)
 		err := run(ctx, op.ID)
+		slog.Info("operation.end", "traceId", traceRoot(trace), "operation", op.ID, "kind", kind, "durationMs", time.Since(started).Milliseconds(), "error", err)
 		a.changeOp(op.ID, func(o *Operation) {
 			o.State = "success"
 			if err != nil {

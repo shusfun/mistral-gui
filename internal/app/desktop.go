@@ -53,6 +53,9 @@ func ConnectExisting(addr, dir string, quit bool) error {
 	if quit {
 		req.Method = "POST"
 		req.URL.Path = "/api/v1/manager/quit"
+	} else {
+		req.Method = "POST"
+		req.URL.Path = "/api/v1/manager/show"
 	}
 	req.Header.Set("Authorization", "Bearer "+state.Config.Token)
 	resp, e := c.Do(req)
@@ -62,9 +65,6 @@ func ConnectExisting(addr, dir string, quit bool) error {
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 && resp.StatusCode != 202 {
 		return errors.New("manager_connection_failed")
-	}
-	if !quit {
-		openURL("http://" + addr + "/manage#token=" + state.Config.Token)
 	}
 	return nil
 }

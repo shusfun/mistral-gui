@@ -14,10 +14,10 @@ Windows 安装向导先选择中文或 English。Mac 将 `.app` 拖到 Applicati
 
 ## 第一次使用
 
-1. 启动应用，浏览器打开 `http://127.0.0.1:19820/manage`。
+1. 启动应用打开桌面窗口；浏览器管理入口仍为 `http://127.0.0.1:19820/manage`。
 2. 在“设备与后端”查看 CPU、GPU、内存和 Windows 运行库状态。
 3. 选择后端并检查运行时资产。官方有对应资产时优先使用官方版本；缺失目标才使用标注“补充 CI 资产”的版本。
-4. 下载运行时与 HY-MT1.5-1.8B GGUF 权重。默认 Q4_K_M 约 1.06 GiB；首次加载还需要下载 tokenizer 元数据。
+4. 下载运行时及模型。目录覆盖 HY-MT、Qwen3、SmolLM3 的兼容 GGUF／safetensors 版本，也可填写自定义仓库或导入本地文件。safetensors 下载配置、tokenizer 和完整权重；HY-MT GGUF 首次加载还需 tokenizer 元数据。
 5. 启动模型，执行测试请求，再打开官方 WebUI。
 
 Windows CPU 不需要显卡；CUDA 12.x 补充资产面向 NVIDIA Ampere / SM80 或更新架构，需要兼容驱动。Intel Mac 使用 CPU，Apple Silicon 使用 Metal。Auto 在 Windows/Intel Mac 选择 CPU，在 Apple Silicon 选择 Metal。
@@ -30,7 +30,7 @@ Windows CPU 不需要显卡；CUDA 12.x 补充资产面向 NVIDIA Ampere / SM80 
 
 - 本地地址：`http://127.0.0.1:19820`
 - Token：从控制台复制；这是私密凭证，不要放入截图、仓库或共享配置。
-- 模型 ID：使用控制台显示的模型文件名。
+- 模型 ID：使用部署 ID，插件设置页支持刷新和选择部署，也可手动填写；旧默认模型文件名继续兼容。
 - 后端：与管理器选择一致，或选择 Auto。
 - 路由：本地优先、仅本地、仅云端。
 
@@ -42,7 +42,9 @@ Windows CPU 不需要显卡；CUDA 12.x 补充资产面向 NVIDIA Ampere / SM80 
 
 默认允许 API 请求按需启动模型，并在空闲 10 分钟后停止。停止模型释放引擎进程，保留权重。退出管理器同时停止其引擎。进行中的请求不会被空闲停止打断。
 
-“更新与设置”检查管理器更新。下载后验证签名和摘要，helper 替换程序，健康检查失败自动恢复上一版本。运行时的 `runtime-*` Release 是独立下载通道，不作为管理器更新。不要将 `.update.zip` 或 `.update.tar.zst` 当作首次安装包。
+关闭窗口只缩到托盘，明确退出才停止全部进程。再次打开应用唤起现有窗口。在“部署实例”填写 ID 和模型，自动推荐后可手动调整。每个部署独立启停，不限制数量；资源警告可确认后继续。停止后可编辑或删除配置，删除配置不会删除权重。
+
+“更新与设置”使用 Wails Updater，原生对话框确认下载和重启；Wails 校验、解包及替换，独立健康守护在新实例未就绪时回滚。`runtime-*` 独立下载，机器更新包均非首次安装包。同版本旧包需下载安装包覆盖一次，之后使用 Wails 更新通道，数据和模型保留。
 
 数据位置：Windows `%APPDATA%\mistral-gui`；macOS `~/Library/Application Support/mistral-gui`。卸载保留数据。使用 `--data-dir` 可创建独立实例；只在退出应用并备份后手动清理数据目录。
 

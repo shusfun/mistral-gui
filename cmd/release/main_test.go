@@ -1,9 +1,11 @@
 package main
 
 import (
+	"archive/zip"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	archiveutil "github.com/shusfun/mistral-gui/internal/archive"
 	"github.com/shusfun/mistral-gui/internal/update"
@@ -17,6 +19,11 @@ import (
 func TestGeneratedReleaseIsAcceptedByUpdater(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"mistral-gui-windows-x64-setup.exe", "mistral-gui-macos-x64.dmg", "mistral-gui-macos-arm64.dmg", "mistral-gui-windows-x64.update.zip", "mistral-gui-macos-x64.update.tar.zst", "mistral-gui-macos-arm64.update.tar.zst"} {
+		if e := os.WriteFile(filepath.Join(dir, name), []byte("fixture "+name), 0600); e != nil {
+			t.Fatal(e)
+		}
+	}
+	for _, name := range []string{"mistral-gui-windows-x64.wails.update.zip", "mistral-gui-macos-x64.update.tar.gz", "mistral-gui-macos-arm64.update.tar.gz"} {
 		if e := os.WriteFile(filepath.Join(dir, name), []byte("fixture "+name), 0600); e != nil {
 			t.Fatal(e)
 		}
@@ -41,6 +48,18 @@ func TestGeneratedReleaseIsAcceptedByUpdater(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
+	for _, name := range []string{"mistral-gui-windows-x64.wails.update.zip", "mistral-gui-macos-x64.update.tar.gz", "mistral-gui-macos-arm64.update.tar.gz"} {
+		data, _ := os.ReadFile(filepath.Join(dir, name))
+		sum := sha256.Sum256(data)
+		encoded, e := os.ReadFile(filepath.Join(dir, name+".sig"))
+		if e != nil {
+			t.Fatal(e)
+		}
+		sig, e := base64.StdEncoding.DecodeString(string(encoded))
+		if e != nil || !ed25519.Verify(pub, sum[:], sig) {
+			t.Fatal("invalid Wails signature", name, e)
+		}
+	}
 	t.Setenv("UPDATE_PUBLIC_KEY", "wrong")
 	if e = manifest(dir, "v1.2.3", "owner/manager"); e == nil {
 		t.Fatal("mismatched key accepted")
@@ -60,5 +79,13 @@ func TestWindowsUpdateArchiveLayout(t *testing.T) {
 	}
 	if _, e := os.Stat(filepath.Join(dest, "mistral-gui-updater.exe")); e != nil {
 		t.Fatal(e)
+	}
+	z, e := zip.OpenReader(filepath.Join(dir, "mistral-gui-windows-x64.wails.update.zip"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer z.Close()
+	if len(z.File) != 1 || z.File[0].Name != "mistral-gui.exe" {
+		t.Fatal("Wails archive must contain exactly the manager executable")
 	}
 }

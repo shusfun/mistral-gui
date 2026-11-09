@@ -33,10 +33,27 @@ func (a *App) Handler() http.Handler {
 		go a.Close()
 	}))
 	mux.HandleFunc("GET /api/v1/status", a.auth(a.status))
-	mux.HandleFunc("GET /api/v1/models", a.auth(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"models": a.installedSnapshot()})
+	mux.HandleFunc("POST /api/v1/manager/show", a.auth(func(w http.ResponseWriter, r *http.Request) {
+		a.mu.Lock()
+		d := a.desktop
+		a.mu.Unlock()
+		if d != nil {
+			d.Show()
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
 	}))
+	mux.HandleFunc("GET /api/v1/recommend", a.auth(a.recommend))
+	mux.HandleFunc("GET /api/v1/capabilities", a.auth(a.capabilities))
+	mux.HandleFunc("GET /api/v1/models", a.auth(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"models": a.installedSnapshot(), "deployments": a.deploymentViews()})
+	}))
+	mux.HandleFunc("POST /api/v1/deployments", a.auth(a.putDeployment))
+	mux.HandleFunc("POST /api/v1/deployments/delete", a.auth(a.deleteDeployment))
+	mux.HandleFunc("POST /api/v1/deployments/rollback", a.auth(a.rollbackDeployment))
 	mux.HandleFunc("GET /api/v1/assets", a.auth(a.assetList))
+	mux.HandleFunc("GET /api/v1/catalog", a.auth(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"repositories": catalog.Repositories})
+	}))
 	mux.HandleFunc("POST /api/v1/assets/install", a.auth(a.installAsset))
 	mux.HandleFunc("POST /api/v1/models/delete", a.auth(func(w http.ResponseWriter, r *http.Request) {
 		var v struct {
@@ -120,24 +137,10 @@ func (a *App) Handler() http.Handler {
 		}
 		a.status(w, r)
 	}))
-	mux.HandleFunc("POST /api/v1/runtime/start", a.auth(func(w http.ResponseWriter, r *http.Request) {
-		trace := r.Header.Get("traceparent")
-		op := a.operation("start", trace, func(ctx context.Context, id string) error {
-			err := a.ensureEngine(ctx, trace)
-			if ctx.Err() != nil {
-				a.stopEngine()
-			}
-			return err
-		})
-		writeJSON(w, 202, op)
-	}))
-	mux.HandleFunc("POST /api/v1/runtime/stop", a.auth(func(w http.ResponseWriter, r *http.Request) { a.stopEngine(); writeJSON(w, 200, a.stateSnapshot()) }))
+	mux.HandleFunc("POST /api/v1/runtime/start", a.auth(a.runtimeAction("start")))
+	mux.HandleFunc("POST /api/v1/runtime/stop", a.auth(a.runtimeAction("stop")))
 	mux.HandleFunc("POST /api/v1/runtime/fallback-cpu", a.auth(a.fallbackCPU))
-	mux.HandleFunc("POST /api/v1/runtime/restart", a.auth(func(w http.ResponseWriter, r *http.Request) {
-		trace := r.Header.Get("traceparent")
-		op := a.operation("restart", trace, func(ctx context.Context, id string) error { a.stopEngine(); return a.ensureEngine(ctx, trace) })
-		writeJSON(w, 202, op)
-	}))
+	mux.HandleFunc("POST /api/v1/runtime/restart", a.auth(a.runtimeAction("restart")))
 	mux.HandleFunc("POST /api/v1/runtime/rollback", a.auth(func(w http.ResponseWriter, r *http.Request) {
 		a.stopEngine()
 		a.mu.Lock()
@@ -194,7 +197,7 @@ func (a *App) Handler() http.Handler {
 	}))
 	mux.HandleFunc("POST /api/v1/update/check", a.auth(a.updateCheck))
 	mux.HandleFunc("POST /api/v1/update/install", a.auth(a.updateInstall))
-	mux.HandleFunc("/", a.auth(a.proxy))
+	mux.HandleFunc("/", a.auth(a.routeProxy))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		trace := r.Header.Get("traceparent")
 		if !validTraceparent(trace) {
@@ -284,6 +287,23 @@ func (a *App) session(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 func (a *App) status(w http.ResponseWriter, r *http.Request) {
+	if a.parent != nil {
+		installed := a.parent.installedSnapshot()
+		a.mu.Lock()
+		a.installed = installed
+		a.mu.Unlock()
+	}
+	if id := r.URL.Query().Get("model"); id != "" && a.parent == nil {
+		child, e := a.resolveDeployment(id)
+		if e != nil {
+			fail(w, 404, e.Error())
+			return
+		}
+		if child != a {
+			child.status(w, r)
+			return
+		}
+	}
 	a.mu.Lock()
 	c := a.config
 	c.Token = ""
@@ -293,7 +313,7 @@ func (a *App) status(w http.ResponseWriter, r *http.Request) {
 	revision := ""
 	selectedBackend := c.Backend
 	for _, in := range a.installedSnapshot() {
-		if in.Kind == "engine" && in.Path == c.Engine {
+		if in.Kind == "engine" && in.Path == c.Engine && c.Backend == "auto" {
 			selectedBackend = in.Backend
 		}
 		if in.Kind == "model" && in.ID == c.Model && (c.ModelVersion == "" || c.ModelVersion == in.Version) {
@@ -304,7 +324,15 @@ func (a *App) status(w http.ResponseWriter, r *http.Request) {
 	if b, e := os.ReadFile(filepath.Join(a.dataDir, "update-status.json")); e == nil {
 		_ = json.Unmarshal(b, &updateResult)
 	}
-	writeJSON(w, 200, map[string]any{"status": s, "settings": c, "operations": ops, "platform": runtime.GOOS + "/" + runtime.GOARCH, "version": Version, "model_revision": revision, "selected_backend": selectedBackend, "update_result": updateResult})
+	views := a.deploymentViews()
+	fingerprint := ""
+	for _, v := range views {
+		if v.Model == c.Model {
+			fingerprint = v.Fingerprint
+			break
+		}
+	}
+	writeJSON(w, 200, map[string]any{"status": s, "settings": c, "operations": ops, "platform": runtime.GOOS + "/" + runtime.GOARCH, "version": Version, "model_revision": revision, "deployment_revision": fingerprint, "deployments": views, "endpoint": "http://" + a.addr, "selected_backend": selectedBackend, "update_result": updateResult})
 }
 func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 	var v struct {
@@ -383,6 +411,14 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "settings_write_failed")
 		return
 	}
+	if v.Language != nil {
+		a.mu.Lock()
+		desktop := a.desktop
+		a.mu.Unlock()
+		if desktop != nil {
+			desktop.RefreshMenus()
+		}
+	}
 	a.status(w, r)
 }
 func (a *App) events(w http.ResponseWriter, r *http.Request) {
@@ -417,8 +453,18 @@ func (a *App) assetList(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	backend := a.config.Backend
 	a.mu.Unlock()
+	type modelResult struct {
+		models []catalog.Asset
+		err    error
+	}
+	result := make(chan modelResult, 1)
+	go func() {
+		models, e := a.catalogModels(ctx, r.URL.Query().Get("repository"), r.URL.Query().Get("refresh") == "1")
+		result <- modelResult{models, e}
+	}()
 	engine, e := a.engineAsset(ctx, backend)
-	models, me := a.catalog.Models(ctx)
+	mr := <-result
+	models, me := mr.models, mr.err
 	errs := map[string]string{}
 	if e != nil {
 		errs["engine"] = e.Error()
@@ -432,8 +478,9 @@ func (a *App) installAsset(w http.ResponseWriter, r *http.Request) {
 	a.taskStart.Lock()
 	defer a.taskStart.Unlock()
 	var v struct {
-		Kind string `json:"kind"`
-		ID   string `json:"id"`
+		Kind       string `json:"kind"`
+		ID         string `json:"id"`
+		Repository string `json:"repository"`
 	}
 	if decode(r, &v) != nil {
 		fail(w, 400, "invalid_json")
@@ -462,7 +509,7 @@ func (a *App) installAsset(w http.ResponseWriter, r *http.Request) {
 			asset, err = a.engineAsset(ctx, backend)
 		} else {
 			var all []catalog.Asset
-			all, err = a.catalog.Models(ctx)
+			all, err = a.catalogModels(ctx, v.Repository, false)
 			for _, m := range all {
 				if m.ID == v.ID {
 					asset = m

@@ -1,6 +1,6 @@
 # mistral-gui
 
-轻量 Go 本地模型管理器，内嵌管理控制台，通过独立的 [mistral.rs](https://github.com/EricLBuehler/mistral.rs) 运行时提供推理及官方 WebUI。管理器、运行时、模型权重分别下载和更新。管理器不需要 Node.js、Python 或 Rust 环境。
+Go / Wails v3.1.0 桌面本地模型管理器，通过独立的 [mistral.rs](https://github.com/EricLBuehler/mistral.rs) 运行时提供推理及官方 WebUI。管理器、运行时、模型权重分别下载和更新，用户不需要 Node.js、Python 或 Rust 环境。
 
 [下载安装包](https://github.com/shusfun/mistral-gui/releases/latest) · [中文使用指南](docs/usage.zh-CN.md) · [English guide](docs/usage.en.md) · [发行与密钥维护](docs/releases.md) · [Qingyi 插件](https://github.com/shusfun/Qingyi)
 
@@ -8,11 +8,11 @@
 
 用户安装文件只有 Windows x64 `mistral-gui-windows-x64-setup.exe`、macOS Intel `mistral-gui-macos-x64.dmg` 和 Apple Silicon `mistral-gui-macos-arm64.dmg`。暂不提供 Linux 发行包。
 
-Windows 安装向导选择中文或 English；macOS 将应用拖到 Applications，首次启动选择语言。运行中可在管理控制台切换语言。打开应用会启动管理器并在默认浏览器打开控制台；再次打开应用会连接已运行的实例。
+Windows 安装向导选择中文或 English；macOS 将应用拖到 Applications，首次启动选择语言。打开应用显示桌面窗口，再次启动唤起已有窗口。关闭缩到托盘；明确退出停止全部模型和管理器。默认不开机自启，重要确认、错误及文件选择使用原生对话框。
 
 1. 在“设备与后端”检测设备，在“运行时与模型”选择后端。
 2. 检查可用资产并下载运行时，来源会标明“官方 Release”或“补充 CI 资产”。
-3. 下载 HY-MT1.5-1.8B GGUF 权重，默认 Q4_K_M 约 1.06 GiB，也可选择 Q6_K 或 Q8_0。
+3. 从目录选择 HY-MT、Qwen3、SmolLM3 的兼容 GGUF／safetensors 版本，也可填写自定义仓库或导入本地模型。
 4. 启动模型，执行测试推理，然后打开官方 WebUI 或复制 Qingyi 配置。
 
 首次加载还会从 Hugging Face 获取模型的 tokenizer 配置并保存在本机缓存中。模型可用性取决于对应 mistral.rs 版本的 GGUF 支持；启动失败时显示引擎加载原因，不生成模拟译文。
@@ -23,7 +23,7 @@ Windows 可选择 CPU 或 CUDA 12.x；Intel Mac 使用 CPU，Apple Silicon 使�
 
 补充 Windows CUDA 构建会补上 Marlin 的 `<string>` 引用及上游遗漏的 Windows 条件编译分支，并修正 rotary FFI 的 64 位参数声明，避免 Windows 的 32 位 `long` 截断 CUDA 流句柄。FA3 与分页缓存写入在 Windows 上仍按上游限制处理，不伪装为可用；补丁仅应用于缺失资产的补充构建。
 
-管理器本身无额外运行库依赖。mistral.rs 官方 Windows 二进制还依赖 Microsoft Visual C++ 运行库；设备检测页会检查并在缺少时提供 Microsoft 官方下载入口，无需安装开发工具链。
+Windows 桌面使用 WebView2，缺失时可下载并验证微软 Evergreen 安装器；macOS 使用系统 WebKit。mistral.rs 官方 Windows 二进制还依赖 Microsoft Visual C++ 运行库，检测页提供微软下载入口，无需开发工具链。
 
 默认只监听 `127.0.0.1:19820`，引擎使用另一个内部回环端口。聊天和会话操作在 mistral.rs 官方 `/ui` 完成，管理器不提供另一套聊天页面。
 
@@ -44,7 +44,9 @@ API 使用 `Authorization: Bearer TOKEN`。从快捷方式进入管理页时自�
 
 同名模型的不同修订分别保存，可在停止后选择具体修订或切回上一修订。GPU 启动失败后可点击“改用 CPU 恢复”；这会选择已安装的 CPU 运行时，缺少时下载，并明确显示降级状态。管理器不会把失败的 GPU 请求伪装成成功。
 
-应用数据默认保存在 Windows `%APPDATA%\mistral-gui` 或 macOS `~/Library/Application Support/mistral-gui`。卸载保留下载与模型；完全清理时退出应用后删除该目录。`--data-dir` 可指定独立数据目录，`--addr` 仅接受回环地址，`--no-open` 禁止自动打开浏览器，`--quit` 退出对应实例。
+部署实例具有独立 ID、进程、参数、端口和空闲计时，不限制数量。推荐优先考虑内存预算，再选择加速后端；估算不足可确认后继续。高级设置按已安装引擎的实际 CLI 能力显示。请求的 `model` 使用部署 ID，`/v1/models` 列出运行实例；旧默认模型文件名继续兼容。目录支持搜索、格式和量化筛选，safetensors 快照包括配置、tokenizer 和分片。
+
+应用数据默认保存在 Windows `%APPDATA%\mistral-gui` 或 macOS `~/Library/Application Support/mistral-gui`。卸载保留下载与模型。`--data-dir` 指定数据目录，`--addr` 仅接受回环地址，`--no-open` 使用无窗口服务模式，`--quit` 退出对应管理器。
 
 ## Qingyi
 
@@ -52,7 +54,9 @@ API 使用 `Authorization: Bearer TOKEN`。从快捷方式进入管理页时自�
 
 ## 自更新与发行
 
-管理器更新使用 Ed25519 签名的 `release-manifest.json` 及每个更新资产的 SHA-256。Windows 使用 `.update.zip`，macOS 使用 `.update.tar.zst`；这些文件供已安装程序更新。更新在独立 helper 中执行，等待旧进程退出，保留上一版本，重启后检查版本及健康状态，失败恢复上一版本。macOS 应先复制到可写的 Applications 目录，不能直接在只读 DMG 中自更新。
+管理器使用 Wails Updater，配合续传 Provider、SHA-256 和固定 Ed25519 公钥验证。Windows 使用 `.wails.update.zip`，macOS 使用 `.update.tar.gz`。Wails 负责替换及重启；独立恢复副本和健康守护处理新实例六十秒内未就绪的回滚。旧 `.update.zip`／`.update.tar.zst` 和签名清单仅供旧协议迁移。macOS 应先复制到可写的 Applications。
+
+当前 Release 采用同版本覆盖；已经安装相同版本的用户需下载安装包覆盖一次，之后使用 Wails 更新。配置和模型保留，不随管理器更新重新下载。
 
 `.github/workflows/release.yml` 构建 Windows x64、macOS Intel/Apple Silicon 安装包和机器更新包，生成 `SHA256SUMS`、签名及清单。不会将推理引擎、模型或额外源码压缩包放入管理器资产。GitHub 自动提供的源码下载属于 GitHub 平台功能。
 
@@ -64,7 +68,7 @@ API 使用 `Authorization: Bearer TOKEN`。从快捷方式进入管理页时自�
 
 `.github/workflows/runtime-assets.yml` 手动指定上游版本，先检查该版本官方资产；仅构建缺失的 Intel Mac CPU 和 Windows CUDA，并发布至独立运行时 Release。构建 CUDA 需要 CUDA 工具链，构建本身不要求 GPU。官方下载或元数据失败不会被伪装成“官方缺包”。
 
-本地构建使用 Go 1.23 或更新版本：
+本地构建使用 Go 1.26，工具链固定 Go 1.26.10；macOS 需要 Xcode Command Line Tools 和 CGO：
 
 ```powershell
 go test ./...
@@ -81,7 +85,7 @@ macOS 在对应 runner 上先构建 `dist/mistral-gui` 和 `dist/mistral-gui-upd
 
 ## English
 
-A small Go manager with an embedded management console. Inference and chat are provided by a separately downloaded mistral.rs runtime and its official WebUI. No Python, Node.js or Rust installation is required on user devices.
+A Go/Wails v3.1.0 desktop manager. Closing hides to the tray; explicit Quit stops all engines. Run independent model deployments without an instance-count cap, browse compatible GGUF/safetensors repositories and apply memory recommendations with manual overrides. Inference and chat use the separately downloaded mistral.rs runtime and its official WebUI.
 
 Install the Windows x64 setup EXE or the Intel/Apple Silicon macOS DMG. Choose Chinese or English, detect the device, install a runtime and an HY-MT GGUF model, start it, then open the official WebUI or copy the Qingyi configuration. First load also downloads tokenizer metadata. Windows supports CPU/CUDA 12.x; Intel Macs use CPU and Apple Silicon uses Metal. Linux distributions are not included.
 

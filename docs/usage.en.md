@@ -14,10 +14,10 @@ OS code signing and Ed25519 update signing are different. Builds without Authent
 
 ## First launch
 
-1. Open the application; the browser opens `http://127.0.0.1:19820/manage`.
+1. Open the Wails desktop application. Browser management remains available at `http://127.0.0.1:19820/manage`.
 2. Detect your device and choose a backend.
 3. Check runtime assets. Matching upstream releases always take precedence over supplemental builds.
-4. Download the runtime and HY-MT1.5-1.8B GGUF weights. Q4_K_M is approximately 1.06 GiB. Initial loading also downloads tokenizer metadata.
+4. Browse compatible HY-MT, Qwen3 or SmolLM3 GGUF/safetensors models, enter a custom repository or import local files. Safetensors snapshots include configuration, tokenizer and all weight shards. HY-MT GGUF initially downloads tokenizer metadata.
 5. Start the model, run a test request, then open the official mistral.rs WebUI.
 
 Windows supports CPU and supplemental CUDA 12.x builds for NVIDIA Ampere / SM80 and newer architectures with a compatible driver. Intel Macs use CPU; Apple Silicon uses Metal. Auto selects CPU on Windows/Intel Macs and Metal on Apple Silicon. No Rust, Node.js or Python installation is required for users. Official Windows runtimes may require the Microsoft VC++ runtime; device detection provides its official download link if missing.
@@ -32,6 +32,8 @@ Other clients use `http://127.0.0.1:19820/v1` and `Authorization: Bearer TOKEN`.
 
 Models start on demand and stop after ten idle minutes by default. In-flight requests prevent idle shutdown. Stopping retains downloaded weights; quitting stops both the manager and its engine.
 
-Manager updates verify the manifest signature and archive digest, restart through a helper and roll back after a failed health check. `runtime-*` releases are a separate engine channel. Update archives are not first-install packages.
+Closing hides to the tray; explicit Quit stops all instances. Opening the app again focuses its existing window. Native dialogs handle confirmations, errors and file selection. Create independent deployments with unique IDs and no instance-count cap. Recommendations prioritize memory fit before acceleration and permit manual overrides. Advanced controls reflect the installed engine's capabilities. Qingyi can refresh the deployment list; use a deployment ID as the OpenAI model value.
+
+Manager updates use Wails Updater with resumable downloads, pinned Ed25519 verification and native confirmations. A separate recovery copy protects against a newly launched app failing its health check. Same-version overwritten releases require one manual installer replacement; subsequent updates use Wails. Runtime and model assets remain separate.
 
 Data lives in `%APPDATA%\mistral-gui` on Windows or `~/Library/Application Support/mistral-gui` on macOS. Uninstallation preserves data. `--data-dir` selects an isolated data directory. Inspect task errors and redacted logs for missing runtime libraries, incompatible drivers, insufficient memory or network failures.

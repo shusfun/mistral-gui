@@ -16,6 +16,9 @@ import (
 )
 
 func (a *App) install(ctx context.Context, id string, asset catalog.Asset) error {
+	if asset.Kind == "model" && len(asset.Files) > 0 {
+		return a.installModel(ctx, id, asset)
+	}
 	if strings.ContainsAny(asset.ID, `/\:`) || strings.ContainsAny(asset.Version, `/\:`) {
 		return errors.New("invalid_asset")
 	}
@@ -143,6 +146,16 @@ func (a *App) installedSnapshot() []Installed {
 func (a *App) deleteModel(id, version string) error {
 	a.lifecycle.Lock()
 	defer a.lifecycle.Unlock()
+	for _, child := range a.children() {
+		child.lifecycle.Lock()
+		defer child.lifecycle.Unlock()
+		child.mu.Lock()
+		used := child.engine != nil && child.state.Model == id
+		child.mu.Unlock()
+		if used {
+			return errors.New("model_in_use")
+		}
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.engine != nil && a.state.Model == id {
@@ -150,7 +163,11 @@ func (a *App) deleteModel(id, version string) error {
 	}
 	for i, in := range a.installed {
 		if in.Kind == "model" && in.ID == id && (version == "" || in.Version == version) {
-			if err := os.Remove(in.Path); err != nil {
+			remove := os.Remove
+			if in.Format == "safetensors" {
+				remove = os.RemoveAll
+			}
+			if err := remove(in.Path); err != nil {
 				return err
 			}
 			a.installed = append(a.installed[:i], a.installed[i+1:]...)

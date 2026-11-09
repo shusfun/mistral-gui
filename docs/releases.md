@@ -1,5 +1,13 @@
 # 发行维护
 
+## Wails 桌面更新
+
+使用 Wails v3.1.0 / Go 1.26.10。Windows `.wails.update.zip` 仅含 EXE，macOS `.update.tar.gz` 仅含完整 `.app` 并保留可执行位。各更新包有独立 `.sig`：用现有 Ed25519 密钥签署原始 SHA-256 摘要字节，以 Base64 文本保存。`SHA256SUMS` 包括安装包、新更新包和旧协议包。
+
+旧 `.update.zip`／`.update.tar.zst` 保留原布局及签名 `release-manifest.json`，供旧协议迁移。Wails Provider 精确匹配平台文件，独立运行时不会进入管理器更新。原生确认后才下载与重启；独立健康守护在 `updates/recovery` 保留恢复副本并检测新进程就绪，不依赖 Wails 临时备份。
+
+覆盖现有 Release 时手动运行工作流且 `publish=false`，先取得 `manager-release-complete` 全平台产物，保存现有资产及标签指向，再将标签关联到最终提交。统一替换包，最后发布签名清单及摘要。同版本旧客户端需下载安装包覆盖一次，之后使用 Wails 更新。
+
 管理器仓库：[shusfun/mistral-gui](https://github.com/shusfun/mistral-gui)。配套插件：[shusfun/Qingyi](https://github.com/shusfun/Qingyi)。两者各自版本、各自 Release；只通过 localhost OpenAI 兼容 API 配合使用。
 
 ## 管理器通道

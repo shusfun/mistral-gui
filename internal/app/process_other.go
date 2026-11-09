@@ -20,7 +20,29 @@ func memoryInfo() (uint64, uint64) {
 		return 0, 0
 	}
 	n, _ := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
-	return n, 0
+	vm, e := exec.Command("/usr/bin/vm_stat").Output()
+	if e != nil {
+		return n, 0
+	}
+	page := uint64(4096)
+	var free uint64
+	for _, line := range strings.Split(string(vm), "\n") {
+		if strings.Contains(line, "page size of ") {
+			fields := strings.Fields(line)
+			for i, f := range fields {
+				if f == "of" && i+1 < len(fields) {
+					page, _ = strconv.ParseUint(fields[i+1], 10, 64)
+				}
+			}
+		}
+		for _, key := range []string{"Pages free:", "Pages inactive:", "Pages speculative:"} {
+			if strings.HasPrefix(line, key) {
+				v, _ := strconv.ParseUint(strings.Trim(strings.TrimPrefix(line, key), " .\t\r"), 10, 64)
+				free += v
+			}
+		}
+	}
+	return n, free * page
 }
 func ownProcess(c *exec.Cmd) (func(), error) {
 	// The pipe closes even after an abrupt manager exit. The OS shell is present on macOS.

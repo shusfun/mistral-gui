@@ -1,31 +1,444 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>mistral-gui</title><link rel="stylesheet" href="/manage/style.css"></head>
-<body>
-<dialog id="language-dialog"><div class="brand">m / gui</div><h1>欢迎使用 · Welcome</h1><p>选择界面语言 / Choose your language</p><div class="actions"><button data-language="zh-CN">简体中文</button><button data-language="en-US">English</button></div></dialog>
-<dialog id="login-dialog"><h2 data-t="connect">连接管理器</h2><p data-t="loginHint">请从桌面快捷方式打开，或输入本机管理器 Token。</p><label>Token<input id="login-token" type="password" autocomplete="off"></label><button id="login" data-t="connect">连接</button><p id="login-error" role="status"></p></dialog>
-<div class="shell">
-<aside><a href="/manage" class="brand">mistral<span> / gui</span></a><p class="eyebrow" data-t="localWorkspace">你的本地模型工作台</p><nav aria-label="Main">
-<button data-page="overview" class="selected" data-t="overview">概览</button><button data-page="models" data-t="models">运行时与模型</button><button data-page="device" data-t="device">设备与后端</button><button data-page="connection" data-t="connection">API 与诊断</button><button data-page="updates" data-t="updates">更新与设置</button></nav>
-<footer><span id="platform">—</span><span id="version">—</span><select id="language" aria-label="Language"><option value="zh-CN">简体中文</option><option value="en-US">English</option></select><button id="quit" class="secondary" data-t="quit">退出管理器</button></footer></aside>
-<main>
-<header><div><p class="eyebrow">LOCAL INFERENCE, ON YOUR TERMS</p><h1 id="page-title" data-t="overview">概览</h1></div><span id="connection-state" class="badge" data-t="connecting">连接中</span></header>
-<p id="notice" role="status" aria-live="polite"></p>
-<section id="overview" class="page">
- <article id="welcome" class="card hero"><p class="eyebrow" data-t="gettingStarted">开始使用</p><h2 data-t="welcomeTitle">让模型在需要时运行。</h2><p data-t="welcomeBody">只安装一次运行时和模型，使用时启动，空闲时释放资源。聊天由官方 WebUI 提供。</p><ol id="steps"><li data-t="setupDetect">检测设备</li><li data-t="step1">选择后端</li><li data-t="setupChooseModel">选择模型</li><li data-t="setupDownload">下载并校验</li><li data-t="start">启动</li><li data-t="test">测试推理</li><li data-t="setupConnect">连接使用</li></ol><p id="setup-detail" aria-live="polite"></p><div class="actions"><button id="setup-next" data-t="detect">检测设备</button><button data-go="models" class="secondary" data-t="setup">配置运行时与模型</button></div></article>
- <article class="card"><div class="card-head"><h2 data-t="runtime">模型运行状态</h2><span id="runtime-state" class="badge">—</span></div><h3 id="current-model">—</h3><p id="current-backend" class="muted">—</p><p id="runtime-error" class="error"></p><div class="actions"><button id="start" data-t="start">启动</button><button id="stop" class="secondary" data-t="stop">停止</button><button id="restart" class="secondary" data-t="restart">重启</button><button id="fallback-cpu" class="secondary" data-t="fallback_cpu" hidden>改用 CPU 恢复</button><button id="open-ui" class="secondary" data-t="openUI">打开官方 WebUI ↗</button><button id="test" class="secondary" data-t="test">测试推理</button></div><p id="test-result" role="status"></p><div class="stats"><div><span data-t="requests">累计请求</span><strong id="requests">—</strong></div><div><span data-t="active">当前请求</span><strong id="active">—</strong></div><div><span data-t="testLatency">测试耗时</span><strong id="test-latency">—</strong></div></div></article>
-</section>
-<section id="models" class="page" hidden>
- <article class="card"><h2 data-t="engine">mistral.rs 运行时</h2><p class="muted" data-t="officialFirst">优先使用官方 Release。官方缺包时才下载补充 CI 资产。</p><div class="form-grid"><label><span data-t="backend">后端</span><select id="backend"><option value="auto">Auto</option><option value="cpu">CPU</option><option value="cuda">NVIDIA CUDA</option><option value="metal">Apple Metal</option></select></label></div><div class="actions"><button id="save-backend" data-t="saveBackend">保存后端</button><button id="refresh-assets" class="secondary" data-t="checkAssets">检查可用资产</button><button id="install-engine" class="secondary" data-t="installEngine">下载运行时</button><button id="rollback-engine" class="secondary" data-t="rollbackEngine">切回上一运行时</button></div><div id="engine-info" class="muted" role="status"></div></article>
- <article class="card"><h2 data-t="modelLibrary">模型库</h2><p class="muted" data-t="modelHint">权重与运行时分开存储，停止运行不会删除文件。</p><div class="form-grid"><label><span data-t="availableModel">可下载模型</span><select id="available-model"><option>HY-MT1.5-1.8B-Q4_K_M.gguf</option></select></label></div><div class="actions"><button id="install-model" data-t="downloadModel">下载模型</button><button id="rollback-model" class="secondary" data-t="rollbackModel">切回上一模型</button></div><h3 data-t="installedModels">已安装模型</h3><div id="installed-models" class="rows"></div><h3 data-t="installedEngines">已安装运行时</h3><div id="installed-engines" class="rows"></div></article>
-</section>
-<section id="device" class="page" hidden><article class="card"><h2 data-t="device">设备与后端</h2><p data-t="deviceHint">驱动和后端是否可用以本机检测为准，未取得的指标显示为未知。</p><button id="detect" data-t="detect">检测设备</button><dl id="device-info"></dl><p id="vc-help" hidden><span data-t="vcHint">mistral.rs 官方 Windows 资产需要 Microsoft Visual C++ 运行库。</span> <a href="https://aka.ms/vs/17/release/vc_redist.x64.exe" target="_blank" rel="noopener" data-t="vcDownload">从 Microsoft 下载</a></p></article></section>
-<section id="connection" class="page" hidden>
- <article class="card"><h2 data-t="connection">API 与诊断</h2><label><span data-t="endpoint">OpenAI 兼容地址</span><input id="endpoint" readonly></label><label>Token<input id="token" type="password" readonly></label><div class="actions"><button id="copy-config" data-t="copyConfig">复制 Qingyi 配置</button><button id="copy-token" class="secondary" data-t="copyToken">复制 Token</button><button id="reveal-token" class="secondary" data-t="revealToken">显示 / 隐藏 Token</button><button id="rotate-token" class="secondary" data-t="rotateToken">重新生成 Token</button><button id="export" class="secondary" data-t="export">导出诊断</button></div><p class="muted" data-t="tokenHint">Token 只保存在本机。重新生成后，需要重新配置客户端。</p><pre id="api-example"></pre></article>
- <article class="card"><h2 data-t="logs">管理器日志</h2><button id="load-logs" class="secondary" data-t="refreshLogs">刷新日志</button><pre id="log-output" aria-live="polite"></pre></article>
-</section>
-<section id="updates" class="page" hidden>
- <article class="card"><h2 data-t="appUpdate">管理器更新</h2><p data-t="updateHint">管理器、mistral.rs 运行时和模型分别更新。管理器更新校验签名，失败自动回退。</p><div class="actions"><button id="check-update" data-t="checkUpdate">检查更新</button><button id="install-update" class="secondary" disabled data-t="installUpdate">下载并安装更新</button></div><p id="update-info" role="status"></p></article>
- <article class="card"><h2 data-t="preferences">运行偏好</h2><label class="check"><input id="auto-start" type="checkbox"><span data-t="autoStart">API 请求时自动启动已安装模型</span></label><label><span data-t="idle">空闲停止（分钟，0 表示关闭）</span><input id="idle" type="number" min="0" max="1440" value="10"></label><label><span data-t="mirrors">HTTPS 下载镜像前缀（每行一个）</span><textarea id="mirrors" rows="3" placeholder="https://your-mirror.example/"></textarea></label><button id="save-settings" data-t="save">保存</button></article>
-</section>
-<section class="card tasks"><div class="card-head"><h2 data-t="tasks">任务记录</h2><span class="muted" data-t="taskHint">刷新后保留，失败可重试</span></div><div id="tasks"></div></section>
-</main></div><script type="module" src="/manage/app.js"></script></body></html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>mistral-gui</title>
+    <link rel="stylesheet" href="/manage/style.css" />
+  </head>
+  <body>
+    <section id="language-dialog" hidden>
+      <div class="brand">m / gui</div>
+      <h1>欢迎使用 · Welcome</h1>
+      <p>选择界面语言 / Choose your language</p>
+      <div class="actions">
+        <button data-language="zh-CN">简体中文</button
+        ><button data-language="en-US">English</button>
+      </div>
+    </section>
+    <dialog id="login-dialog">
+      <h2 data-t="connect">连接管理器</h2>
+      <p data-t="loginHint">请从桌面快捷方式打开，或输入本机管理器 Token。</p>
+      <label
+        >Token<input
+          id="login-token"
+          type="password"
+          autocomplete="off" /></label
+      ><button id="login" data-t="connect">连接</button>
+      <p id="login-error" role="status"></p>
+    </dialog>
+    <div class="shell">
+      <aside>
+        <a href="/manage" class="brand">mistral<span> / gui</span></a>
+        <p class="eyebrow" data-t="localWorkspace">你的本地模型工作台</p>
+        <nav aria-label="Main">
+          <button data-page="overview" class="selected" data-t="overview">
+            概览</button
+          ><button data-page="models" data-t="models">运行时与模型</button
+          ><button data-page="device" data-t="device">设备与后端</button
+          ><button data-page="connection" data-t="connection">API 与诊断</button
+          ><button data-page="updates" data-t="updates">更新与设置</button>
+        </nav>
+        <footer>
+          <span id="platform">—</span><span id="version">—</span
+          ><select id="language" aria-label="Language">
+            <option value="zh-CN">简体中文</option>
+            <option value="en-US">English</option></select
+          ><button id="quit" class="secondary" data-t="quit">退出管理器</button>
+        </footer>
+      </aside>
+      <main>
+        <header>
+          <div>
+            <p class="eyebrow">LOCAL INFERENCE, ON YOUR TERMS</p>
+            <h1 id="page-title" data-t="overview">概览</h1>
+          </div>
+          <span id="connection-state" class="badge" data-t="connecting"
+            >连接中</span
+          >
+        </header>
+        <p id="notice" role="status" aria-live="polite"></p>
+        <section id="overview" class="page">
+          <article id="welcome" class="card hero">
+            <p class="eyebrow" data-t="gettingStarted">开始使用</p>
+            <h2 data-t="welcomeTitle">让模型在需要时运行。</h2>
+            <p data-t="welcomeBody">
+              只安装一次运行时和模型，使用时启动，空闲时释放资源。聊天由官方
+              WebUI 提供。
+            </p>
+            <ol id="steps">
+              <li data-t="setupDetect">检测设备</li>
+              <li data-t="step1">选择后端</li>
+              <li data-t="setupChooseModel">选择模型</li>
+              <li data-t="setupDownload">下载并校验</li>
+              <li data-t="start">启动</li>
+              <li data-t="test">测试推理</li>
+              <li data-t="setupConnect">连接使用</li>
+            </ol>
+            <p id="setup-detail" aria-live="polite"></p>
+            <div class="actions">
+              <button id="setup-next" data-t="detect">检测设备</button
+              ><button data-go="models" class="secondary" data-t="setup">
+                配置运行时与模型
+              </button>
+            </div>
+          </article>
+          <article class="card">
+            <div class="card-head">
+              <h2 data-t="runtime">模型运行状态</h2>
+              <span id="runtime-state" class="badge">—</span>
+            </div>
+            <h3 id="current-model">—</h3>
+            <p id="current-backend" class="muted">—</p>
+            <p id="runtime-error" class="error"></p>
+            <div class="actions">
+              <button id="start" data-t="start">启动</button
+              ><button id="stop" class="secondary" data-t="stop">停止</button
+              ><button id="restart" class="secondary" data-t="restart">
+                重启</button
+              ><button
+                id="fallback-cpu"
+                class="secondary"
+                data-t="fallback_cpu"
+                hidden
+              >
+                改用 CPU 恢复</button
+              ><button id="open-ui" class="secondary" data-t="openUI">
+                打开官方 WebUI ↗</button
+              ><button id="test" class="secondary" data-t="test">
+                测试推理
+              </button>
+            </div>
+            <p id="test-result" role="status"></p>
+            <div class="stats">
+              <div>
+                <span data-t="requests">累计请求</span
+                ><strong id="requests">—</strong>
+              </div>
+              <div>
+                <span data-t="active">当前请求</span
+                ><strong id="active">—</strong>
+              </div>
+              <div>
+                <span data-t="testLatency">测试耗时</span
+                ><strong id="test-latency">—</strong>
+              </div>
+            </div>
+          </article>
+        </section>
+        <section id="models" class="page" hidden>
+          <article class="card">
+            <h2 data-t="deployments">部署实例</h2>
+            <p class="muted" data-t="deploymentHint">
+              每个实例独立启停。实例数量由你决定；资源提示不会限制数量。
+            </p>
+            <div id="deployments" class="rows"></div>
+            <h3 data-t="editDeployment">创建／编辑部署</h3>
+            <div class="form-grid">
+              <label
+                ><span data-t="deploymentID">部署 ID</span
+                ><input
+                  id="deployment-id"
+                  placeholder="translation"
+                  maxlength="96" /></label
+              ><label
+                ><span data-t="model">已安装模型</span
+                ><select id="deployment-model"></select></label
+              ><label
+                ><span data-t="backend">后端</span
+                ><select id="deployment-backend">
+                  <option value="auto">Auto</option>
+                  <option value="cpu">CPU</option>
+                  <option value="cuda">CUDA</option>
+                  <option value="metal">Metal</option>
+                </select></label
+              ><label
+                ><span data-t="contextLength">上下文长度</span
+                ><input
+                  id="deployment-context"
+                  type="number"
+                  value="4096"
+                  min="128"
+                  max="1048576" /></label
+              ><label
+                ><span data-t="sequenceCount">并发序列</span
+                ><input
+                  id="deployment-sequences"
+                  type="number"
+                  value="1"
+                  min="1"
+                  max="4096" /></label
+              ><label
+                ><span data-t="gpuLayers">GPU 层数（0 自动）</span
+                ><input
+                  id="deployment-gpu"
+                  type="number"
+                  value="0"
+                  min="0" /></label
+              ><label
+                ><span data-t="isq">加载时量化（safetensors）</span
+                ><select id="deployment-isq">
+                  <option value="">Default</option>
+                  <option>Q4K</option>
+                  <option>Q6K</option>
+                  <option>Q8_0</option>
+                </select></label
+              ><label
+                ><span data-t="idle">空闲停止（分钟）</span
+                ><input
+                  id="deployment-idle"
+                  type="number"
+                  min="0"
+                  max="1440"
+                  value="10"
+              /></label>
+            </div>
+            <label class="check"
+              ><input id="deployment-auto" type="checkbox" checked /><span
+                data-t="autoStart"
+                >API 请求时自动启动</span
+              ></label
+            >
+            <div class="actions">
+              <button
+                id="recommend-deployment"
+                class="secondary"
+                data-t="recommend"
+              >
+                自动推荐</button
+              ><button id="save-deployment" data-t="saveDeployment">
+                保存部署
+              </button>
+            </div>
+            <p id="recommendation" class="muted"></p>
+          </article>
+          <article class="card">
+            <h2 data-t="catalog">模型目录</h2>
+            <div class="form-grid">
+              <label
+                ><span data-t="repository">模型仓库</span
+                ><input
+                  id="model-repository"
+                  list="model-repositories"
+                  value="tencent/HY-MT1.5-1.8B-GGUF" /><datalist
+                  id="model-repositories"
+                ></datalist></label
+              ><label
+                ><span data-t="search">搜索</span
+                ><input id="model-search" type="search" /></label
+              ><label
+                ><span data-t="format">格式</span
+                ><select id="model-format">
+                  <option value="">All</option>
+                  <option value="gguf">GGUF</option>
+                  <option value="safetensors">safetensors</option>
+                </select></label
+              ><label
+                ><span data-t="quantization">量化筛选</span
+                ><input id="model-quantization" placeholder="Q4_K_M"
+              /></label>
+            </div>
+            <div class="actions">
+              <button id="load-catalog" data-t="refreshCatalog">
+                刷新仓库列表</button
+              ><button id="import-gguf" class="secondary" data-t="importGGUF">
+                导入 GGUF</button
+              ><button
+                id="import-directory"
+                class="secondary"
+                data-t="importDirectory"
+              >
+                导入 safetensors 目录
+              </button>
+            </div>
+            <p data-t="customRepositoryHint" class="muted">
+              可以填写自定义仓库；需与当前引擎兼容，不执行仓库中的 Python 代码。
+            </p>
+          </article>
+          <article class="card">
+            <h2 data-t="engine">mistral.rs 运行时</h2>
+            <p class="muted" data-t="officialFirst">
+              优先使用官方 Release。官方缺包时才下载补充 CI 资产。
+            </p>
+            <div class="form-grid">
+              <label
+                ><span data-t="backend">后端</span
+                ><select id="backend">
+                  <option value="auto">Auto</option>
+                  <option value="cpu">CPU</option>
+                  <option value="cuda">NVIDIA CUDA</option>
+                  <option value="metal">Apple Metal</option>
+                </select></label
+              >
+            </div>
+            <div class="actions">
+              <button id="save-backend" data-t="saveBackend">保存后端</button
+              ><button
+                id="refresh-assets"
+                class="secondary"
+                data-t="checkAssets"
+              >
+                检查可用资产</button
+              ><button
+                id="install-engine"
+                class="secondary"
+                data-t="installEngine"
+              >
+                下载运行时</button
+              ><button
+                id="rollback-engine"
+                class="secondary"
+                data-t="rollbackEngine"
+              >
+                切回上一运行时
+              </button>
+            </div>
+            <div id="engine-info" class="muted" role="status"></div>
+          </article>
+          <article class="card">
+            <h2 data-t="modelLibrary">模型库</h2>
+            <p class="muted" data-t="modelHint">
+              权重与运行时分开存储，停止运行不会删除文件。
+            </p>
+            <div class="form-grid">
+              <label
+                ><span data-t="availableModel">可下载模型</span
+                ><select id="available-model">
+                  <option>HY-MT1.5-1.8B-Q4_K_M.gguf</option>
+                </select></label
+              >
+            </div>
+            <div class="actions">
+              <button id="install-model" data-t="downloadModel">下载模型</button
+              ><button
+                id="rollback-model"
+                class="secondary"
+                data-t="rollbackModel"
+              >
+                切回上一模型
+              </button>
+            </div>
+            <h3 data-t="installedModels">已安装模型</h3>
+            <div id="installed-models" class="rows"></div>
+            <h3 data-t="installedEngines">已安装运行时</h3>
+            <div id="installed-engines" class="rows"></div>
+          </article>
+        </section>
+        <section id="device" class="page" hidden>
+          <article class="card">
+            <h2 data-t="device">设备与后端</h2>
+            <p data-t="deviceHint">
+              驱动和后端是否可用以本机检测为准，未取得的指标显示为未知。
+            </p>
+            <button id="detect" data-t="detect">检测设备</button>
+            <dl id="device-info"></dl>
+            <p id="vc-help" hidden>
+              <span data-t="vcHint"
+                >mistral.rs 官方 Windows 资产需要 Microsoft Visual C++
+                运行库。</span
+              >
+              <a
+                href="https://aka.ms/vs/17/release/vc_redist.x64.exe"
+                target="_blank"
+                rel="noopener"
+                data-t="vcDownload"
+                >从 Microsoft 下载</a
+              >
+            </p>
+          </article>
+        </section>
+        <section id="connection" class="page" hidden>
+          <article class="card">
+            <label
+              ><span data-t="deploymentID">部署 ID</span
+              ><select id="api-instance"></select
+            ></label>
+          </article>
+          <article class="card">
+            <h2 data-t="connection">API 与诊断</h2>
+            <label
+              ><span data-t="endpoint">OpenAI 兼容地址</span
+              ><input id="endpoint" readonly /></label
+            ><label>Token<input id="token" type="password" readonly /></label>
+            <div class="actions">
+              <button id="copy-config" data-t="copyConfig">
+                复制 Qingyi 配置</button
+              ><button id="copy-token" class="secondary" data-t="copyToken">
+                复制 Token</button
+              ><button id="reveal-token" class="secondary" data-t="revealToken">
+                显示 / 隐藏 Token</button
+              ><button id="rotate-token" class="secondary" data-t="rotateToken">
+                重新生成 Token</button
+              ><button id="export" class="secondary" data-t="export">
+                导出诊断
+              </button>
+            </div>
+            <p class="muted" data-t="tokenHint">
+              Token 只保存在本机。重新生成后，需要重新配置客户端。
+            </p>
+            <pre id="api-example"></pre>
+          </article>
+          <article class="card">
+            <h2 data-t="logs">管理器日志</h2>
+            <button id="load-logs" class="secondary" data-t="refreshLogs">
+              刷新日志
+            </button>
+            <pre id="log-output" aria-live="polite"></pre>
+          </article>
+        </section>
+        <section id="updates" class="page" hidden>
+          <article class="card">
+            <h2 data-t="appUpdate">管理器更新</h2>
+            <p data-t="updateHint">
+              管理器、mistral.rs
+              运行时和模型分别更新。管理器更新校验签名，失败自动回退。
+            </p>
+            <div class="actions">
+              <button id="check-update" data-t="checkUpdate">检查更新</button
+              ><button
+                id="install-update"
+                class="secondary"
+                disabled
+                data-t="installUpdate"
+              >
+                下载并安装更新
+              </button>
+            </div>
+            <p id="update-info" role="status"></p>
+          </article>
+          <article class="card">
+            <h2 data-t="preferences">运行偏好</h2>
+            <label class="check"
+              ><input id="auto-start" type="checkbox" /><span data-t="autoStart"
+                >API 请求时自动启动已安装模型</span
+              ></label
+            ><label
+              ><span data-t="idle">空闲停止（分钟，0 表示关闭）</span
+              ><input
+                id="idle"
+                type="number"
+                min="0"
+                max="1440"
+                value="10" /></label
+            ><label
+              ><span data-t="mirrors">HTTPS 下载镜像前缀（每行一个）</span
+              ><textarea
+                id="mirrors"
+                rows="3"
+                placeholder="https://your-mirror.example/"
+              ></textarea></label
+            ><button id="save-settings" data-t="save">保存</button>
+          </article>
+        </section>
+        <section class="card tasks">
+          <div class="card-head">
+            <h2 data-t="tasks">任务记录</h2>
+            <span class="muted" data-t="taskHint">刷新后保留，失败可重试</span>
+          </div>
+          <div id="tasks"></div>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/manage/app.js"></script>
+  </body>
+</html>

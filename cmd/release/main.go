@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"archive/zip"
+	"compress/gzip"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -38,6 +39,9 @@ func main() {
 	}
 }
 func pack(dir, goos, arch string) error {
+	if err := packWails(dir, goos, arch); err != nil {
+		return err
+	}
 	label := "x64"
 	if arch == "arm64" {
 		label = "arm64"
@@ -152,6 +156,24 @@ func manifest(dir, version, repo string) error {
 			}
 		}
 	}
+	for _, name := range []string{"mistral-gui-windows-x64.wails.update.zip", "mistral-gui-macos-x64.update.tar.gz", "mistral-gui-macos-arm64.update.tar.gz"} {
+		f, e := os.Open(filepath.Join(dir, name))
+		if e != nil {
+			return e
+		}
+		h := sha256.New()
+		_, e = io.Copy(h, f)
+		f.Close()
+		if e != nil {
+			return e
+		}
+		digest := h.Sum(nil)
+		sums = append(sums, hex.EncodeToString(digest)+"  "+name)
+		sig := base64.StdEncoding.EncodeToString(ed25519.Sign(key, digest)) + "\n"
+		if e = os.WriteFile(filepath.Join(dir, name+".sig"), []byte(sig), 0644); e != nil {
+			return e
+		}
+	}
 	b, e := json.MarshalIndent(m, "", "  ")
 	if e != nil {
 		return e
@@ -167,4 +189,81 @@ func manifest(dir, version, repo string) error {
 		}
 	}
 	return nil
+}
+
+func packWails(dir, goos, arch string) error {
+	if goos == "windows" && arch == "amd64" {
+		f, e := os.Create(filepath.Join(dir, "mistral-gui-windows-x64.wails.update.zip"))
+		if e != nil {
+			return e
+		}
+		defer f.Close()
+		w := zip.NewWriter(f)
+		out, e := w.Create("mistral-gui.exe")
+		if e != nil {
+			return e
+		}
+		in, e := os.Open(filepath.Join(dir, "mistral-gui.exe"))
+		if e != nil {
+			return e
+		}
+		defer in.Close()
+		if _, e = io.Copy(out, in); e != nil {
+			return e
+		}
+		return w.Close()
+	}
+	if goos != "darwin" || (arch != "amd64" && arch != "arm64") {
+		return fmt.Errorf("unsupported platform")
+	}
+	label := "x64"
+	if arch == "arm64" {
+		label = "arm64"
+	}
+	f, e := os.Create(filepath.Join(dir, "mistral-gui-macos-"+label+".update.tar.gz"))
+	if e != nil {
+		return e
+	}
+	defer f.Close()
+	z := gzip.NewWriter(f)
+	w := tar.NewWriter(z)
+	root := filepath.Join(dir, "mistral-gui.app")
+	e = filepath.Walk(root, func(p string, info os.FileInfo, e error) error {
+		if e != nil {
+			return e
+		}
+		link := ""
+		if info.Mode()&os.ModeSymlink != 0 {
+			link, e = os.Readlink(p)
+			if e != nil {
+				return e
+			}
+		}
+		h, e := tar.FileInfoHeader(info, link)
+		if e != nil {
+			return e
+		}
+		rel, _ := filepath.Rel(dir, p)
+		h.Name = filepath.ToSlash(rel)
+		if e = w.WriteHeader(h); e != nil {
+			return e
+		}
+		if info.Mode().IsRegular() {
+			in, e := os.Open(p)
+			if e != nil {
+				return e
+			}
+			defer in.Close()
+			_, e = io.Copy(w, in)
+			return e
+		}
+		return nil
+	})
+	if e != nil {
+		return e
+	}
+	if e = w.Close(); e != nil {
+		return e
+	}
+	return z.Close()
 }

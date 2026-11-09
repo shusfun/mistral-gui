@@ -5,6 +5,10 @@ on:
       version:
         description: Release tag (v0.1.0)
         required: true
+      publish:
+        description: Publish a new release (leave false when replacing an existing release)
+        type: boolean
+        default: false
   push:
     tags: ["v*.*.*"]
 permissions:
@@ -50,13 +54,13 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "0"
+          CGO_ENABLED: ${{ matrix.goos == 'darwin' && '1' || '0' }}
         run: |
           mkdir -p dist
           ext=; gui=
           if [ "$GOOS" = windows ]; then ext=.exe; gui="-H windowsgui"; fi
           flags="-s -w $gui -X github.com/shusfun/mistral-gui/internal/app.Version=$VERSION -X github.com/shusfun/mistral-gui/internal/app.UpdateRepository=$GITHUB_REPOSITORY -X github.com/shusfun/mistral-gui/internal/app.SupplementRepository=$SUPPLEMENT_REPOSITORY -X github.com/shusfun/mistral-gui/internal/app.UpdatePublicKey=$UPDATE_PUBLIC_KEY"
-          go build -trimpath -ldflags="$flags" -o "dist/mistral-gui$ext" ./cmd/mistral-gui
+          go build -tags production -trimpath -ldflags="$flags" -o "dist/mistral-gui$ext" ./cmd/mistral-gui
           go build -trimpath -ldflags="-s -w $gui" -o "dist/mistral-gui-updater$ext" ./cmd/updater
       - name: Install Windows packaging tools
         if: matrix.goos == 'windows'
@@ -119,6 +123,7 @@ jobs:
             dist/*.dmg
             dist/*.update.zip
             dist/*.update.tar.zst
+            dist/*.update.tar.gz
   metadata:
     needs: manager
     runs-on: windows-latest
@@ -140,8 +145,15 @@ jobs:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: go run ./cmd/release -version $env:VERSION -repository $env:GITHUB_REPOSITORY
       - name: Publish release
+        if: github.event_name == 'push' || inputs.publish
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          gh release view $env:VERSION --json tagName *> $null
+          if ($LASTEXITCODE -eq 0) { Write-Output 'Existing release retained for verified replacement.'; exit 0 }
           gh release create $env:VERSION --verify-tag --generate-notes (Get-ChildItem dist -File | ForEach-Object FullName)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manager-release-complete
+          path: dist/*

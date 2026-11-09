@@ -20,7 +20,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>CFBundleExecutable</key><string>mistral-gui</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>LSMinimumSystemVersion</key><string>12.0</string>
-<key>LSUIElement</key><true/>
+<key>NSHighResolutionCapable</key><true/>
 <key>CFBundleLocalizations</key><array><string>en</string><string>zh_CN</string></array>
 </dict></plist>
 PLIST
