@@ -6,10 +6,16 @@ on:
         description: Upstream version with published supplemental assets
         default: v0.9.5
         required: true
+      platform:
+        type: choice
+        description: Native platform to validate
+        options: [all, intel, apple]
+        default: all
 permissions:
   contents: read
 jobs:
   intel-model:
+    if: inputs.platform != 'apple'
     runs-on: macos-15-intel
     timeout-minutes: 30
     steps:
@@ -25,3 +31,26 @@ jobs:
           chmod +x "$RUNNER_TEMP/runtime/mistralrs"
       - name: Load HY-MT and translate on Intel CPU
         run: python3 installer/runtime/model-smoke.py --engine "$RUNNER_TEMP/runtime/mistralrs" --backend cpu --data-dir "$RUNNER_TEMP/hy-mt-smoke"
+  apple-model:
+    if: inputs.platform != 'intel'
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download official Apple Silicon runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][a-zA-Z0-9.]+)?$ ]]
+          name=mistralrs-metal-aarch64-apple-darwin.tar.gz
+          expected=$(gh api "repos/EricLBuehler/mistral.rs/releases/tags/$VERSION" --jq ".assets[]|select(.name==\"$name\")|.digest")
+          [[ "$expected" =~ ^sha256:[0-9a-f]{64}$ ]]
+          gh release download "$VERSION" --repo EricLBuehler/mistral.rs --pattern "$name" --dir "$RUNNER_TEMP/runtime"
+          echo "${expected#sha256:}  $RUNNER_TEMP/runtime/$name" | shasum -a 256 -c -
+          tar -xzf "$RUNNER_TEMP/runtime/$name" -C "$RUNNER_TEMP/runtime"
+          chmod +x "$RUNNER_TEMP/runtime/mistralrs"
+      - name: Load HY-MT using official ARM runtime in CPU mode
+        run: |
+          # Hosted Apple Silicon runners do not provide Metal GPU acceleration.
+          python3 installer/runtime/model-smoke.py --engine "$RUNNER_TEMP/runtime/mistralrs" --backend cpu --data-dir "$RUNNER_TEMP/hy-mt-smoke"
