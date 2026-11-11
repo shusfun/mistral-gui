@@ -58,3 +58,50 @@ func (a *App) DesktopHandler() http.Handler {
 		handler.ServeHTTP(w, r)
 	})
 }
+
+func (a *App) CompletedOperation(id string) (Operation, bool) {
+	a.mu.Lock()
+	for _, op := range a.operations {
+		if op.ID == id {
+			a.mu.Unlock()
+			return op, op.State == "success" || op.State == "failed"
+		}
+	}
+	a.mu.Unlock()
+	for _, child := range a.children() {
+		if op, ok := child.CompletedOperation(id); ok {
+			return op, true
+		}
+	}
+	return Operation{}, false
+}
+
+func (a *App) notifyCompletion(id string) {
+	root := a
+	if a.parent != nil {
+		root = a.parent
+	}
+	root.mu.Lock()
+	d := root.desktop
+	root.mu.Unlock()
+	if sink, ok := d.(interface{ TaskCompleted(string) }); ok {
+		sink.TaskCompleted(id)
+	}
+}
+
+func (a *App) cancelOperation(id string) bool {
+	a.mu.Lock()
+	cancel := a.cancels[id]
+	a.mu.Unlock()
+	if cancel != nil {
+		slog.Info("operation.cancel", "traceId", traceRoot(a.operationTrace(id)), "operation", id)
+		cancel()
+		return true
+	}
+	for _, child := range a.children() {
+		if child.cancelOperation(id) {
+			return true
+		}
+	}
+	return false
+}

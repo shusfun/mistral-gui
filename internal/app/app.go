@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,7 @@ var SupplementTagPrefix = "runtime-"
 var UpdatePublicKey = ""
 
 type Config struct {
+	Theme                string       `json:"theme"`
 	Deployments          []Deployment `json:"deployments,omitempty"`
 	Tuning               Tuning       `json:"tuning"`
 	Token                string       `json:"token"`
@@ -147,6 +149,9 @@ func New(addr, dir string) (*App, error) {
 	}
 	if a.config.Token == "" {
 		a.config.Token = randomToken()
+	}
+	if a.config.Theme == "" {
+		a.config.Theme = "system"
 	}
 	a.restoreDeployments()
 	for i := range a.operations {
@@ -290,6 +295,7 @@ func (a *App) operation(kind, trace string, run func(context.Context, string) er
 		a.mu.Unlock()
 		cancel()
 		_ = a.save()
+		a.notifyCompletion(op.ID)
 	}()
 	return op
 }
@@ -314,3 +320,24 @@ func (a *App) operationTrace(id string) string {
 	return ""
 }
 func (a *App) String() string { return fmt.Sprintf("mistral-gui %s", Version) }
+
+func (a *App) operationSnapshot() []Operation {
+	a.mu.Lock()
+	ops := append([]Operation(nil), a.operations...)
+	a.mu.Unlock()
+	if a.parent == nil {
+		for _, child := range a.children() {
+			child.mu.Lock()
+			for _, op := range child.operations {
+				op.DeploymentID = child.deploymentID
+				ops = append(ops, op)
+			}
+			child.mu.Unlock()
+		}
+	}
+	sort.SliceStable(ops, func(i, j int) bool { return ops[i].UpdatedAt.Before(ops[j].UpdatedAt) })
+	if len(ops) > 200 {
+		ops = ops[len(ops)-200:]
+	}
+	return ops
+}

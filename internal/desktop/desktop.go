@@ -2,7 +2,10 @@ package desktop
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http/httptest"
@@ -16,18 +19,23 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 	"github.com/wailsapp/wails/v3/pkg/icons"
+	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 	"github.com/wailsapp/wails/v3/pkg/updater"
 )
 
 type Service struct {
-	manager      *app.App
-	host         *application.App
-	window       *application.WebviewWindow
-	mu           sync.Mutex
-	ready        bool
-	updating     bool
-	version      string
-	refreshMenus func()
+	manager           *app.App
+	host              *application.App
+	window            *application.WebviewWindow
+	mu                sync.Mutex
+	ready             bool
+	updating          bool
+	version           string
+	refreshMenus      func()
+	notifier          *notifications.NotificationService
+	notified          map[string]bool
+	notificationOrder []string
+	confirmations     map[string]chan bool
 }
 
 func (s *Service) RefreshMenus() {
@@ -44,24 +52,6 @@ func (s *Service) text(zh, en string) string {
 }
 func (s *Service) Show()       { s.window.Show(); s.window.Restore(); s.window.Focus() }
 func (s *Service) Ready() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.ready }
-func (s *Service) question(message string) bool {
-	done := make(chan bool, 1)
-	d := s.host.Dialog.Question().SetTitle("mistral-gui").SetMessage(message).AttachToWindow(s.window)
-	d.AddButton(s.text("取消", "Cancel")).SetAsDefault().SetAsCancel().OnClick(func() {
-		select {
-		case done <- false:
-		default:
-		}
-	})
-	d.AddButton(s.text("继续", "Continue")).OnClick(func() {
-		select {
-		case done <- true:
-		default:
-		}
-	})
-	d.Show()
-	return <-done
-}
 func (s *Service) Command(kind, value, trace string) (any, error) {
 	s.manager.NativeTrace(kind, trace)
 	switch kind {
@@ -70,21 +60,33 @@ func (s *Service) Command(kind, value, trace string) (any, error) {
 		s.ready = true
 		s.mu.Unlock()
 		return true, nil
-	case "confirm-delete":
-		return s.question(s.text("删除此模型文件？正在使用的模型无法删除。", "Delete this model's files? Models in use cannot be deleted.")), nil
-	case "confirm-rotate":
-		return s.question(s.text("重新生成 API Token？已连接的客户端需要重新配置。", "Regenerate the API token? Connected clients will need reconfiguration.")), nil
-	case "warning-memory":
-		return s.question(s.text("估算内存不足或尚无法确认可用内存。仍然保存此部署？", "Estimated memory is insufficient or available memory is unknown. Save this deployment anyway?")), nil
-	case "error":
-		s.host.Dialog.Error().SetTitle(s.text("操作失败", "Operation failed")).SetMessage(value).AttachToWindow(s.window).Show()
+	case "confirm-result":
+		var reply struct {
+			ID       string `json:"id"`
+			Accepted bool   `json:"accepted"`
+		}
+		if json.Unmarshal([]byte(value), &reply) != nil {
+			return nil, errors.New("invalid_confirmation")
+		}
+		s.mu.Lock()
+		pending := s.confirmations[reply.ID]
+		s.mu.Unlock()
+		if pending != nil {
+			select {
+			case pending <- reply.Accepted:
+			default:
+			}
+		}
 		return nil, nil
+	case "task-notification":
+		return s.notifyTask(value)
 	case "export":
 		path, e := s.host.Dialog.SaveFile().SetFilename("mistral-gui-diagnostics.json").AddFilter("JSON", "*.json").AttachToWindow(s.window).PromptForSingleSelection()
 		if e != nil || path == "" {
 			return nil, e
 		}
 		req := httptest.NewRequest("GET", "http://"+s.manager.Address()+"/api/v1/diagnostics", nil)
+		req.Header.Set("traceparent", trace)
 		w := httptest.NewRecorder()
 		s.manager.DesktopHandler().ServeHTTP(w, req)
 		if w.Code != 200 {
@@ -111,9 +113,6 @@ func (s *Service) Command(kind, value, trace string) (any, error) {
 		}
 		return s.manager.ImportModel(path, trace)
 	case "update":
-		if !s.question(s.text("下载并安装更新？重启时会停止所有运行中的模型。", "Download and install the update? Restarting will stop all running models.")) {
-			return nil, nil
-		}
 		return s.manager.DesktopUpdate(trace), nil
 	case "quit":
 		s.manager.Close()
@@ -124,9 +123,9 @@ func (s *Service) Command(kind, value, trace string) (any, error) {
 	}
 }
 func Run(manager *app.App, hidden bool) error {
-	s := &Service{manager: manager}
-	s.host = application.New(application.Options{Name: "mistral-gui", Description: "Local model manager", Services: []application.Service{application.NewService(s)}, Assets: application.AssetOptions{Handler: manager.DesktopHandler()}, Mac: application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: false}, OnShutdown: manager.Close})
-	s.window = s.host.Window.NewWithOptions(application.WebviewWindowOptions{Title: "mistral-gui", Width: 1120, Height: 820, MinWidth: 860, MinHeight: 620, URL: "/manage?desktop=1", Hidden: hidden})
+	s := &Service{manager: manager, notifier: notifications.New(), notified: map[string]bool{}, confirmations: map[string]chan bool{}}
+	s.host = application.New(application.Options{Name: "mistral-gui", Description: "Local model manager", Services: []application.Service{application.NewService(s), application.NewService(s.notifier)}, Assets: application.AssetOptions{Handler: manager.DesktopHandler()}, Mac: application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: false}, OnShutdown: manager.Close})
+	s.window = s.host.Window.NewWithOptions(application.WebviewWindowOptions{Title: "mistral-gui", Width: 1121, Height: 821, MinWidth: 861, MinHeight: 621, Frameless: runtime.GOOS != "darwin", Windows: application.WindowsWindow{NonClientRegionSupport: true, WebView2CompositionHosting: true}, Mac: application.MacWindow{TitleBar: application.MacTitleBarHidden, InvisibleTitleBarHeight: 47}, URL: "/manage?desktop=1", Hidden: hidden})
 	s.window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) { s.window.Hide(); e.Cancel() })
 	s.host.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(e *application.ApplicationEvent) { s.Show() })
 	tray := s.host.SystemTray.New()
@@ -168,6 +167,7 @@ func Run(manager *app.App, hidden bool) error {
 		managerMenu.Add(s.text("退出", "Quit")).OnClick(func(*application.Context) { manager.Close(); s.host.Quit() })
 		s.host.Menu.Set(menu)
 	}
+	s.notifier.OnNotificationResponse(func(notifications.NotificationResult) { s.Show(); s.window.SetURL("/manage?desktop=1#activity") })
 	s.RefreshMenus()
 	manager.AttachDesktop(s)
 	if app.UpdateRepository != "" && app.UpdatePublicKey != "" {
@@ -236,7 +236,7 @@ func (s *Service) InstallUpdate(ctx context.Context, trace, id string) error {
 		return e
 	}
 	s.manager.UpdateProgress(id, 1, 1, "ready")
-	if !s.question(s.text("更新已准备好。立即停止模型并重启？", "The update is ready. Stop models and restart now?")) {
+	if !s.confirm(ctx, trace, s.text("更新已准备好。立即停止模型并重启？", "The update is ready. Stop models and restart now?")) {
 		return nil
 	}
 	s.mu.Lock()
@@ -251,4 +251,69 @@ func (s *Service) InstallUpdate(ctx context.Context, trace, id string) error {
 		return e
 	}
 	return nil
+}
+
+func (s *Service) notifyTask(id string) (bool, error) {
+	op, ok := s.manager.CompletedOperation(id)
+	if !ok || (op.Kind != "install" && op.Kind != "start" && op.Kind != "restart" && op.Kind != "update") {
+		return false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sent, found := s.notified[id]; found {
+		return sent, nil
+	}
+	if len(s.notificationOrder) >= 200 {
+		delete(s.notified, s.notificationOrder[0])
+		s.notificationOrder = s.notificationOrder[1:]
+	}
+	s.notificationOrder = append(s.notificationOrder, id)
+	if s.window.IsFocused() && s.window.IsVisible() {
+		s.notified[id] = false
+		s.manager.NativeTrace("notification.foreground", op.TraceID)
+		return false, nil
+	}
+	allowed, err := s.notifier.CheckNotificationAuthorization()
+	if err != nil || !allowed {
+		s.notified[id] = true
+		return true, nil
+	}
+	body := s.text("任务已完成，可返回管理器查看。", "Task completed. Open the manager to review.")
+	if op.State == "failed" {
+		body = s.text("任务失败，请返回管理器查看原因。", "Task failed. Open the manager for details.")
+	}
+	s.notified[id] = true
+	err = s.notifier.SendNotification(notifications.NotificationOptions{ID: op.ID, Title: "mistral-gui", Body: body})
+	if err == nil {
+		s.manager.NativeTrace("notification.native", op.TraceID)
+		s.notified[id] = true
+	}
+	return true, err
+}
+
+func (s *Service) TaskCompleted(id string) {
+	if _, err := s.notifyTask(id); err != nil {
+		slog.Warn("notification.failed", "reason", "NATIVE_NOTIFICATION_UNAVAILABLE")
+	}
+}
+
+func (s *Service) confirm(ctx context.Context, trace, message string) bool {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return false
+	}
+	id := hex.EncodeToString(nonce[:])
+	answer := make(chan bool, 1)
+	s.mu.Lock()
+	s.confirmations[id] = answer
+	s.mu.Unlock()
+	defer func() { s.mu.Lock(); delete(s.confirmations, id); s.mu.Unlock() }()
+	s.Show()
+	s.host.Event.Emit("desktop:confirm", map[string]string{"id": id, "message": message, "trace": trace})
+	select {
+	case accepted := <-answer:
+		return accepted
+	case <-ctx.Done():
+		return false
+	}
 }

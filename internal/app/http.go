@@ -32,6 +32,7 @@ func (a *App) Handler() http.Handler {
 		writeJSON(w, 202, map[string]bool{"ok": true})
 		go a.Close()
 	}))
+	mux.HandleFunc("POST /api/v1/ui-events", a.auth(a.uiEvents))
 	mux.HandleFunc("GET /api/v1/status", a.auth(a.status))
 	mux.HandleFunc("POST /api/v1/manager/show", a.auth(func(w http.ResponseWriter, r *http.Request) {
 		a.mu.Lock()
@@ -187,13 +188,7 @@ func (a *App) Handler() http.Handler {
 			fail(w, 400, "invalid_json")
 			return
 		}
-		a.mu.Lock()
-		c := a.cancels[v.ID]
-		a.mu.Unlock()
-		if c != nil {
-			c()
-		}
-		writeJSON(w, 200, map[string]bool{"ok": c != nil})
+		writeJSON(w, 200, map[string]bool{"ok": a.cancelOperation(v.ID)})
 	}))
 	mux.HandleFunc("POST /api/v1/update/check", a.auth(a.updateCheck))
 	mux.HandleFunc("POST /api/v1/update/install", a.auth(a.updateInstall))
@@ -308,8 +303,8 @@ func (a *App) status(w http.ResponseWriter, r *http.Request) {
 	c := a.config
 	c.Token = ""
 	s := a.state
-	ops := append([]Operation(nil), a.operations...)
 	a.mu.Unlock()
+	ops := a.operationSnapshot()
 	revision := ""
 	selectedBackend := c.Backend
 	for _, in := range a.installedSnapshot() {
@@ -336,6 +331,7 @@ func (a *App) status(w http.ResponseWriter, r *http.Request) {
 }
 func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 	var v struct {
+		Theme        *string   `json:"theme"`
 		Language     *string   `json:"language"`
 		Backend      *string   `json:"backend"`
 		Model        *string   `json:"model"`
@@ -346,6 +342,10 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := decode(r, &v); err != nil {
 		fail(w, 400, "invalid_json")
+		return
+	}
+	if v.Theme != nil && *v.Theme != "system" && *v.Theme != "light" && *v.Theme != "dark" {
+		fail(w, 400, "invalid_theme")
 		return
 	}
 	if v.Language != nil && *v.Language != "zh-CN" && *v.Language != "en-US" {
@@ -390,6 +390,9 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 		}
 		a.selectModelLocked(selected)
 	}
+	if v.Theme != nil {
+		a.config.Theme = *v.Theme
+	}
 	if v.Language != nil {
 		a.config.Language = *v.Language
 	}
@@ -431,9 +434,7 @@ func (a *App) events(w http.ResponseWriter, r *http.Request) {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	for {
-		a.mu.Lock()
-		b, _ := json.Marshal(map[string]any{"status": a.state, "operations": a.operations})
-		a.mu.Unlock()
+		b, _ := json.Marshal(map[string]any{"status": a.stateSnapshot(), "operations": a.operationSnapshot(), "deployments": a.deploymentViews()})
 		if _, err := fmt.Fprintf(w, "event: status\ndata: %s\n\n", b); err != nil {
 			return
 		}
