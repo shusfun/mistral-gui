@@ -8,7 +8,7 @@ Go / Wails v3.1.0 桌面本地模型管理器，通过独立的 [mistral.rs](htt
 
 用户安装文件只有 Windows x64 `mistral-gui-windows-x64-setup.exe`、macOS Intel `mistral-gui-macos-x64.dmg` 和 Apple Silicon `mistral-gui-macos-arm64.dmg`。暂不提供 Linux 发行包。
 
-Windows 安装向导选择中文或 English；macOS 将应用拖到 Applications，首次启动选择语言。打开应用显示桌面窗口，再次启动唤起已有窗口。关闭缩到托盘；明确退出停止全部模型和管理器。默认不开机自启，重要确认、错误及文件选择使用原生对话框。
+Windows 安装向导选择中文或 English；macOS 将应用拖到 Applications，首次启动选择语言。打开应用显示桌面窗口，再次启动唤起已有窗口。关闭缩到托盘；明确退出停止全部模型和管理器。默认不开机自启，操作确认使用应用内对话框，错误保留在界面，文件选择与保存使用系统对话框。支持浅色、深色和跟随系统；部署详情、任务与诊断分别组织，编辑中的草稿不会被后台刷新覆盖。
 
 1. 在“设备与后端”检测设备，在“运行时与模型”选择后端。
 2. 检查可用资产并下载运行时，来源会标明“官方 Release”或“补充 CI 资产”。
@@ -56,7 +56,7 @@ API 使用 `Authorization: Bearer TOKEN`。从快捷方式进入管理页时自�
 
 管理器使用 Wails Updater，配合续传 Provider、SHA-256 和固定 Ed25519 公钥验证。Windows 使用 `.wails.update.zip`，macOS 使用 `.update.tar.gz`。Wails 负责替换及重启；独立恢复副本和健康守护处理新实例六十秒内未就绪的回滚。旧 `.update.zip`／`.update.tar.zst` 和签名清单仅供旧协议迁移。macOS 应先复制到可写的 Applications。
 
-当前 Release 采用同版本覆盖；已经安装相同版本的用户需下载安装包覆盖一次，之后使用 Wails 更新。配置和模型保留，不随管理器更新重新下载。
+v0.2.0 提供新的分区工作台和自绘窗口头部。可通过“更新与设置”检查更新，或下载安装包覆盖升级；配置和模型保留，不随管理器更新重新下载。
 
 `.github/workflows/release.yml` 构建 Windows x64、macOS Intel/Apple Silicon 安装包和机器更新包，生成 `SHA256SUMS`、签名及清单。不会将推理引擎、模型或额外源码压缩包放入管理器资产。GitHub 自动提供的源码下载属于 GitHub 平台功能。
 
