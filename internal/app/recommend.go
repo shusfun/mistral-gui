@@ -72,6 +72,20 @@ func (a *App) recommend(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "model_not_installed")
 		return
 	}
+	writeJSON(w, 200, recommendModel(device, model))
+}
+
+type Recommendation struct {
+	Device                Device   `json:"device"`
+	Backend               string   `json:"backend"`
+	Tuning                Tuning   `json:"tuning"`
+	EstimatedBytes        uint64   `json:"estimated_bytes"`
+	EstimatedLoadingBytes uint64   `json:"estimated_loading_bytes"`
+	Warnings              []string `json:"warnings"`
+	Advisory              bool     `json:"advisory"`
+}
+
+func recommendModel(device Device, model Installed) Recommendation {
 	backend := "cpu"
 	if device.Metal {
 		backend = "metal"
@@ -114,5 +128,5 @@ func (a *App) recommend(w http.ResponseWriter, r *http.Request) {
 		tuning.Context = 2048
 		warnings = append(warnings, "memory_budget_exceeded")
 	}
-	writeJSON(w, 200, map[string]any{"device": device, "backend": backend, "tuning": tuning, "estimated_bytes": required, "estimated_loading_bytes": peak, "warnings": warnings, "advisory": true})
+	return Recommendation{device, backend, tuning, required, peak, warnings, true}
 }

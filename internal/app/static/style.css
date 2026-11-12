@@ -85,3 +85,35 @@
 .titlebar[hidden] {
   display: none;
 }
+.deployment-card {
+  padding: var(--space-5);
+  border: var(--stroke) solid var(--color-border);
+  border-radius: var(--radius-md);
+  margin: var(--space-4) 0;
+}
+.deployment-card h3 {
+  margin: 0;
+}
+.copy-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-4);
+  align-items: end;
+}
+.task-progress {
+  height: var(--space-2);
+  background: var(--color-raised);
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+}
+.task-progress > div {
+  height: 100%;
+  background: var(--color-accent);
+  transform-origin: left;
+}
+@media (max-width: 575px) {
+  .copy-field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+}

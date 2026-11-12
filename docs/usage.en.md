@@ -15,10 +15,9 @@ OS code signing and Ed25519 update signing are different. Builds without Authent
 ## First launch
 
 1. Open the Wails desktop application. Browser management remains available at `http://127.0.0.1:19820/manage`.
-2. Detect your device and choose a backend.
-3. Check runtime assets. Matching upstream releases always take precedence over supplemental builds.
-4. Browse compatible HY-MT, Qwen3 or SmolLM3 GGUF/safetensors models, enter a custom repository or import local files. Safetensors snapshots include configuration, tokenizer and all weight shards. HY-MT GGUF initially downloads tokenizer metadata.
-5. Start the model, run a test request, then open the official mistral.rs WebUI.
+2. In Deployments, select a downloaded model or choose one from the model catalog, then click **Deploy and start**. Download a model first when needed; local model files and custom repositories are also supported.
+3. The manager prepares and verifies the model and matching inference engine, saves the deployment, starts it and checks API availability. The deployment card shows progress and offers cancel or retry. Installed resources are reused; a GPU startup failure offers an explicit CPU retry.
+4. When it is running, copy the OpenAI Base URL, Model ID and token, or test the API from the card. The default Base URL is `http://127.0.0.1:19820/v1`.
 
 Windows supports CPU and supplemental CUDA 12.x builds for NVIDIA Ampere / SM80 and newer architectures with a compatible driver. Intel Macs use CPU; Apple Silicon uses Metal. Auto selects CPU on Windows/Intel Macs and Metal on Apple Silicon. No Rust, Node.js or Python installation is required for users. Official Windows runtimes may require the Microsoft VC++ runtime; device detection provides its official download link if missing.
 
@@ -32,7 +31,7 @@ Other clients use `http://127.0.0.1:19820/v1` and `Authorization: Bearer TOKEN`.
 
 Models start on demand and stop after ten idle minutes by default. In-flight requests prevent idle shutdown. Stopping retains downloaded weights; quitting stops both the manager and its engine.
 
-Closing hides to the tray; explicit Quit stops all instances. Opening the app again focuses its existing window. Native dialogs handle confirmations, errors and file selection. Create independent deployments with unique IDs and no instance-count cap. Recommendations prioritize memory fit before acceleration and permit manual overrides. Advanced controls reflect the installed engine's capabilities. Qingyi can refresh the deployment list; use a deployment ID as the OpenAI model value.
+Closing hides to the tray; explicit Quit stops all instances. Opening the app again focuses its existing window. Deployments can be started, stopped and tested independently; preparing one does not change or stop another. Advanced controls are optional. Qingyi can refresh the deployment list; use the copied deployment ID as the OpenAI model value.
 
 Manager updates use Wails Updater with resumable downloads, pinned Ed25519 verification and native confirmations. A separate recovery copy protects against a newly launched app failing its health check. Same-version overwritten releases require one manual installer replacement; subsequent updates use Wails. Runtime and model assets remain separate.
 

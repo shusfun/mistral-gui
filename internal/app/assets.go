@@ -16,6 +16,13 @@ import (
 )
 
 func (a *App) install(ctx context.Context, id string, asset catalog.Asset) error {
+	if err := a.acquireResources(ctx); err != nil {
+		return err
+	}
+	defer a.releaseResources()
+	return a.installResource(ctx, id, asset)
+}
+func (a *App) installResource(ctx context.Context, id string, asset catalog.Asset) error {
 	if asset.Kind == "model" && len(asset.Files) > 0 {
 		return a.installModel(ctx, id, asset)
 	}
@@ -97,7 +104,6 @@ func (a *App) install(ctx context.Context, id string, asset catalog.Asset) error
 	a.lifecycle.Lock()
 	defer a.lifecycle.Unlock()
 	a.mu.Lock()
-	oldModel, hadModel := a.modelLocked(a.config.Model, a.config.ModelVersion)
 	exists := false
 	for _, in := range a.installed {
 		if in.Path == path {
@@ -106,22 +112,6 @@ func (a *App) install(ctx context.Context, id string, asset catalog.Asset) error
 	}
 	if !exists {
 		a.installed = append(a.installed, Installed{asset, path})
-	}
-	if asset.Kind == "engine" && a.engine == nil {
-		if a.config.Engine != path {
-			a.config.PreviousEngine = a.config.Engine
-		}
-		a.config.Engine = path
-		a.config.EngineVersion = asset.Version
-	}
-	if asset.Kind == "model" && a.engine == nil && asset.ID == a.config.Model {
-		if hadModel && oldModel.Path != path {
-			a.config.PreviousModel, a.config.PreviousModelVersion = oldModel.ID, oldModel.Version
-		}
-		a.config.ModelVersion = asset.Version
-	}
-	if asset.Kind == "model" && a.engine == nil && !hadModel {
-		a.config.Model, a.config.ModelVersion = asset.ID, asset.Version
 	}
 	a.mu.Unlock()
 	return a.save()

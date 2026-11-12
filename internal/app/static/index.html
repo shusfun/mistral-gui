@@ -41,14 +41,9 @@
         <a href="/manage" class="brand">mistral<span> / gui</span></a>
         <p class="eyebrow" data-t="localWorkspace">你的本地模型工作台</p>
         <nav aria-label="Main">
-          <button data-page="overview" class="selected" data-t="overview">
-            概览</button
-          ><button data-page="instances" data-t="deployments">部署实例</button
-          ><button data-page="models" data-t="models">运行时与模型</button
-          ><button data-page="device" data-t="device">设备与后端</button
-          ><button data-page="connection" data-t="connection">API 与诊断</button
-          ><button data-page="activity" data-t="tasks">任务</button
-          ><button data-page="updates" data-t="updates">更新与设置</button>
+          <button data-page="instances" data-t="deployments">部署</button>
+          <button data-page="models" data-t="models">模型</button>
+          <button data-page="updates" data-t="updates">设置</button>
         </nav>
         <footer>
           <span id="platform">—</span><span id="version">—</span
@@ -159,6 +154,7 @@
                 ><select id="deployment-filter" data-transient>
                   <option value="" data-t="allStates">全部状态</option>
                   <option value="running" data-t="running">运行中</option>
+                  <option value="preparing" data-t="preparing">准备中</option>
                   <option value="stopped" data-t="stopped">已停止</option>
                   <option value="failed" data-t="failed">失败</option>
                 </select></label
@@ -179,6 +175,13 @@
           <div id="deployment-tabs" class="tabs"></div>
           <article id="deployment-run" class="card"></article>
           <article id="deployment-form" class="card">
+            <a href="#models" data-t="catalog">模型目录</a>
+            <label class="check"
+              ><input id="deployment-recommend" type="checkbox" checked /><span
+                data-t="recommendedDefaults"
+                >自动推荐运行参数</span
+              ></label
+            >
             <h3 data-t="editDeployment">创建／编辑部署</h3>
             <div class="form-grid">
               <label

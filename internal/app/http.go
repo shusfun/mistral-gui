@@ -49,6 +49,7 @@ func (a *App) Handler() http.Handler {
 		writeJSON(w, 200, map[string]any{"models": a.installedSnapshot(), "deployments": a.deploymentViews()})
 	}))
 	mux.HandleFunc("POST /api/v1/deployments", a.auth(a.putDeployment))
+	mux.HandleFunc("POST /api/v1/deployments/prepare", a.auth(a.prepareDeployment))
 	mux.HandleFunc("POST /api/v1/deployments/delete", a.auth(a.deleteDeployment))
 	mux.HandleFunc("POST /api/v1/deployments/rollback", a.auth(a.rollbackDeployment))
 	mux.HandleFunc("GET /api/v1/assets", a.auth(a.assetList))

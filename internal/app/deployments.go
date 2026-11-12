@@ -24,6 +24,7 @@ type Tuning struct {
 	BatchTokens int     `json:"batch_tokens,omitempty"`
 }
 type Deployment struct {
+	Repository      string `json:"repository,omitempty"`
 	ID              string `json:"id"`
 	Model           string `json:"model"`
 	Version         string `json:"model_version,omitempty"`
@@ -136,9 +137,15 @@ func validateTuning(t Tuning) error {
 	return nil
 }
 func (a *App) putDeployment(w http.ResponseWriter, r *http.Request) {
+	a.taskStart.Lock()
+	defer a.taskStart.Unlock()
 	var d Deployment
 	if decode(r, &d) != nil {
 		fail(w, 400, "invalid_json")
+		return
+	}
+	if a.preparing(d.ID) {
+		fail(w, 409, "deployment_busy")
 		return
 	}
 	if !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}$`).MatchString(d.ID) || d.ID == "default" {
@@ -236,11 +243,17 @@ func (a *App) rollbackDeployment(w http.ResponseWriter, r *http.Request) {
 	a.putDeployment(w, next)
 }
 func (a *App) deleteDeployment(w http.ResponseWriter, r *http.Request) {
+	a.taskStart.Lock()
+	defer a.taskStart.Unlock()
 	var v struct {
 		ID string `json:"id"`
 	}
 	if decode(r, &v) != nil {
 		fail(w, 400, "invalid_json")
+		return
+	}
+	if a.preparing(v.ID) {
+		fail(w, 409, "deployment_busy")
 		return
 	}
 	a.lifecycle.Lock()
@@ -289,6 +302,18 @@ func (a *App) runtimeAction(kind string) http.HandlerFunc {
 		child, e := a.resolveDeployment(v.ID)
 		if e != nil {
 			fail(w, 404, e.Error())
+			return
+		}
+		a.taskStart.Lock()
+		defer a.taskStart.Unlock()
+		canonical := v.ID
+		if child == a {
+			a.mu.Lock()
+			canonical = a.config.Model
+			a.mu.Unlock()
+		}
+		if a.preparing(canonical) {
+			fail(w, 409, "deployment_busy")
 			return
 		}
 		trace := r.Header.Get("traceparent")
@@ -346,6 +371,16 @@ func (a *App) routeProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Query().Has("instance") {
 		http.SetCookie(w, &http.Cookie{Name: "mistral_gui_instance", Value: id, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	}
+	canonical := id
+	if child == a {
+		a.mu.Lock()
+		canonical = a.config.Model
+		a.mu.Unlock()
+	}
+	if a.preparing(canonical) {
+		fail(w, 503, "deployment_busy")
+		return
 	}
 	if child != a {
 		installed := a.installedSnapshot()

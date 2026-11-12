@@ -1,3 +1,8 @@
+import { deploymentCard } from "/manage/ui/deployment-card.js";
+import {
+  deploymentMessages,
+  setupDeploymentLayout,
+} from "/manage/ui/deployment-layout.js";
 import { setupWindow } from "/manage/ui/window.js";
 import {
   button,
@@ -109,6 +114,24 @@ const messages = {
     checking: "正在检查…",
     noUpdate: "当前已是最新版",
     install_engine_and_model_first: "请先安装运行时和模型。",
+    model_unknown: "模型目录中未找到此模型。请检查仓库和模型名称后重试。",
+    model_support_files_missing: "模型目录缺少配置或分词器文件，请选择完整模型目录。",
+    model_weights_missing: "目录中没有可用的模型权重文件。",
+    engine_binary_missing: "运行时压缩包中没有可启动的引擎文件，请重新检查更新源。",
+    backend_invalid: "当前设备不支持所选推理后端，请改用自动推荐或 CPU。",
+    engine_not_ready: "引擎没有报告可用模型。请查看技术详情后重试。",
+    deployment_busy: "此部署正在准备。请等待当前任务或取消后重试。",
+    invalid_deployment_id: "部署名称只能包含字母、数字、点、下划线和连字符。",
+    cancelled: "任务已取消，已验证的模型和运行时会保留。",
+    model_unknown: "模型目录中未找到此模型。请检查仓库和模型名称后重试。",
+    model_support_files_missing: "模型目录缺少配置或分词器文件，请选择完整模型目录。",
+    model_weights_missing: "目录中没有可用的模型权重文件。",
+    engine_binary_missing: "运行时压缩包中没有可启动的引擎文件，请重新检查更新源。",
+    backend_invalid: "当前设备不支持所选推理后端，请改用自动推荐或 CPU。",
+    engine_not_ready: "引擎没有报告可用模型。请查看技术详情后重试。",
+    deployment_busy: "此部署正在准备。请等待当前任务或取消后重试。",
+    invalid_deployment_id: "部署名称只能包含字母、数字、点、下划线和连字符。",
+    cancelled: "任务已取消，已验证的模型和运行时会保留。",
     supplement_repository_required: "此平台官方暂无资产，尚未配置补充仓库。",
     update_repository_unconfigured: "此构建未配置更新仓库，正式发行时配置。",
     update_key_unconfigured: "此构建未配置更新签名公钥。",
@@ -218,6 +241,15 @@ const messages = {
     checking: "Checking…",
     noUpdate: "You're up to date",
     install_engine_and_model_first: "Install a runtime and model first.",
+    model_unknown: "This model was not found in the catalog. Check its repository and name, then retry.",
+    model_support_files_missing: "The model folder is missing its config or tokenizer. Choose a complete model folder.",
+    model_weights_missing: "No model weights were found in this folder.",
+    engine_binary_missing: "No runnable engine was found in the runtime archive. Check the release source and retry.",
+    backend_invalid: "This inference backend is not supported. Choose Auto or CPU.",
+    engine_not_ready: "The engine did not report a ready model. Review the details and retry.",
+    deployment_busy: "This deployment is being prepared. Wait for its task or cancel it before retrying.",
+    invalid_deployment_id: "Deployment names may contain letters, numbers, dots, underscores, and hyphens.",
+    cancelled: "Task cancelled. Verified models and runtimes are kept.",
     supplement_repository_required:
       "No official asset exists for this target and no supplemental repository is configured.",
     update_repository_unconfigured:
@@ -575,7 +607,16 @@ function renderRoute() {
     "activity",
     "updates",
   ];
-  const name = known.includes(section) ? section : "overview";
+  const aliases = {
+    overview: "instances",
+    device: "updates",
+    connection: "updates",
+    activity: "updates",
+  };
+  const name =
+    aliases[section] || (known.includes(section) ? section : "instances");
+  if (["device", "connection", "activity"].includes(section))
+    $(section).closest("details").open = true;
   page = name === "instances" && encodedID ? "deployment-detail" : name;
   for (const e of document.querySelectorAll("main > .page"))
     e.hidden = e.id !== page;
@@ -595,8 +636,7 @@ function renderRoute() {
       return;
     }
     detailTab = ["run", "config", "diagnostic"].includes(tab) ? tab : "run";
-    if (id === current?.settings.model && detailTab === "config")
-      detailTab = "run";
+
     if (id === "new") detailTab = "config";
     const deployment = current?.deployments?.find((d) => d.id === id);
     if (id !== "new" && current && !deployment) {
@@ -626,7 +666,8 @@ function renderRoute() {
           else if (e.type === "checkbox") e.checked = e.defaultChecked;
           else e.value = e.defaultValue;
         }
-        $("deployment-id").value = "";
+        $("deployment-id").value = suggestedID();
+        $("deployment-recommend").checked = true;
       }
     }
     $("deployment-title").textContent = id === "new" ? t("newDeployment") : id;
@@ -638,12 +679,6 @@ function renderRoute() {
       ["diagnostic", "diagnosticTab"],
     ]) {
       if (id === "new" && key !== "config") continue;
-      if (
-        deployment &&
-        deployment.id === current.settings.model &&
-        key === "config"
-      )
-        continue;
       const a = document.createElement("a");
       a.textContent = t(label);
       a.href = "#instances/" + encodeURIComponent(id) + "/" + key;
@@ -651,7 +686,11 @@ function renderRoute() {
       tabs.append(a);
     }
     const isDefault = deployment && deployment.id === current?.settings.model;
-    $("deployment-form").hidden = detailTab !== "config" || isDefault;
+    $("deployment-form").hidden = detailTab !== "config";
+    $("deployment-model").disabled = !!isDefault;
+    $("save-deployment").textContent = t(
+      deployment?.status.state === "running" ? "saveRestart" : "deployStart",
+    );
     $("deployment-run").hidden = detailTab !== "run";
     $("deployment-diagnostics").hidden = detailTab !== "diagnostic";
     $("deployment-id").readOnly = id !== "new";
@@ -667,6 +706,7 @@ function renderRoute() {
         }),
       );
   }
+  if (page === "models" && !assets) refreshAssets().catch(actionError);
   if (current) {
     deploymentsKey = "";
     renderDeployments(current.deployments || []);
@@ -850,8 +890,11 @@ function renderTasks(ops) {
       progress.value = 0;
       progress.setAttribute("aria-valuetext", t("unknown"));
     }
-    row.querySelector(".task-step").textContent = op.error
-      ? errorText(op.error)
+    row.querySelector(".task-step").textContent =
+      op.state === "cancelled"
+        ? t("cancelled")
+        : op.error
+          ? errorText(op.error)
       : [
           t(op.step),
           op.total
@@ -866,7 +909,7 @@ function renderTasks(ops) {
     const b = row.querySelector("button"),
       canRetry =
         op.state !== "success" &&
-        ["start", "restart", "install"].includes(op.kind);
+        ["start", "restart", "install", "prepare"].includes(op.kind);
     b.hidden = op.state !== "running" && !canRetry;
     b.textContent = t(op.state === "running" ? "cancel" : "retry");
     b.onclick = () =>
@@ -874,14 +917,18 @@ function renderTasks(ops) {
         api(
           op.state === "running"
             ? "/api/v1/tasks/cancel"
-            : op.kind === "install"
-              ? "/api/v1/assets/install"
-              : "/api/v1/runtime/start",
+            : op.kind === "prepare"
+              ? "/api/v1/deployments/prepare"
+              : op.kind === "install"
+                ? "/api/v1/assets/install"
+                : "/api/v1/runtime/start",
           op.state === "running"
             ? { id: op.id }
-            : op.kind === "install"
-              ? { kind: op.asset_kind, id: op.asset_id }
-              : { id: op.deployment_id || "" },
+            : op.kind === "prepare"
+              ? op.prepare
+              : op.kind === "install"
+                ? { kind: op.asset_kind, id: op.asset_id }
+                : { id: op.deployment_id || "" },
           undefined,
           trace,
         ),
@@ -936,16 +983,7 @@ async function load(trace = newTrace()) {
       m.version.slice(0, 12);
     row.append(meta);
     for (const [label, action] of [
-      [
-        "selectModel",
-        (trace) =>
-          request(
-            "/api/v1/settings",
-            { model: m.id, model_version: m.version },
-            undefined,
-            trace,
-          ),
-      ],
+      ["deployModel", () => chooseDeploymentModel(m)],
       [
         "deleteModel",
         async (trace) => {
@@ -997,34 +1035,7 @@ async function load(trace = newTrace()) {
     row.className = "row";
     const title = document.createElement("p");
     title.textContent = m.version + " · " + m.backend + " · " + t(m.source);
-    const b = button("");
-    b.className = "secondary";
-    b.textContent = t("selectModel");
-    b.disabled = m.path === d.settings.engine;
-    b.onclick = (event) => {
-      const control = event.currentTarget;
-      if (control.disabled) return;
-      control.disabled = true;
-      void runOperation("list-action", async (trace) => {
-        const { api, nativeCommand } = scoped(trace);
-
-        try {
-          await api("/api/v1/runtime/select", {
-            id: m.id,
-            version: m.version,
-            backend: m.backend,
-          });
-          await load(trace);
-        } catch (e) {
-          throw e;
-        }
-      })
-        .catch(actionError)
-        .finally(() => {
-          control.disabled = false;
-        });
-    };
-    row.append(title, b);
+    row.append(title);
     engines.append(row);
   }
   if (!engines.children.length) engines.textContent = t("uninstalled");
@@ -1036,7 +1047,9 @@ async function load(trace = newTrace()) {
         : "");
   const tok = await api("/api/v1/token");
   $("token").value = tok.token;
-  $("endpoint").value = managerEndpoint + "/v1/chat/completions";
+  $("endpoint").value = managerEndpoint + "/v1";
+  deploymentsKey = "";
+  renderDeployments(current.deployments || []);
   $("api-example").textContent =
     "curl " +
     managerEndpoint +
@@ -1122,6 +1135,7 @@ async function refreshAssets(refresh = false, trace = newTrace()) {
       " MiB";
   if (assets.errors?.models) notice(errorText(assets.errors.models));
   filterCatalog();
+  await populateInstalled();
 }
 bind("refresh-assets", async (trace) => {
   const { api, nativeCommand } = scoped(trace);
@@ -1131,13 +1145,11 @@ bind("install-engine", async (trace) => {
   const { api, nativeCommand } = scoped(trace);
   return api("/api/v1/assets/install", { kind: "engine", id: "" });
 });
-bind("install-model", async (trace) => {
-  const { api, nativeCommand } = scoped(trace);
-  return api("/api/v1/assets/install", {
-    kind: "model",
-    id: $("available-model").value,
-    repository: $("model-repository").value,
-  });
+bind("install-model", async () => {
+  const m = assets?.models?.find((m) => m.id === $("available-model").value);
+  if (!m) throw Error(t("chooseModel"));
+  await populateInstalled();
+  chooseDeploymentModel(m);
 });
 bind("rollback-model", async (trace) => {
   const { api, nativeCommand } = scoped(trace);
@@ -1454,91 +1466,70 @@ function fillDeployment(d) {
   $("deployment-batch").value = d.tuning?.batch_tokens || 0;
   $("deployment-idle").value = d.idle_minutes;
   $("deployment-auto").checked = d.auto_start;
+  $("deployment-recommend").checked = false;
   recommendation = undefined;
   deploymentCapabilities().catch((e) => notice(e.message));
 }
 let deploymentsKey = "";
 function renderDeployments(items) {
+  const operations = current?.operations || [];
   const key = JSON.stringify([
     lang,
     page,
     editingID,
     items,
+    operations,
     [...deploymentTests],
+    $("token").value,
   ]);
   if (key === deploymentsKey) return;
   deploymentsKey = key;
+  const focused = document.activeElement,
+    focusID = focused?.closest("[data-deployment]")?.dataset.deployment,
+    focusAction = focused?.dataset.action;
+  const open = new Set(
+    [...document.querySelectorAll("details[data-connection][open]")].map(
+      (e) => e.dataset.connection,
+    ),
+  );
   const root = $("deployments"),
     selection = $("api-instance").value;
   root.replaceChildren();
   $("api-instance").replaceChildren();
   for (const d of items) {
+    const op = [...operations]
+      .reverse()
+      .find((op) => op.kind === "prepare" && op.deployment_id === d.id);
+    if (
+      !d.model_revision &&
+      d.id === current.settings.model &&
+      !op &&
+      d.status.state === "stopped"
+    )
+      continue;
     const option = document.createElement("option");
     option.value = d.id;
-    option.textContent = d.id + " · " + t(d.status.state);
+    option.textContent = d.id;
     $("api-instance").append(option);
-    const row = document.createElement("div");
-    row.className = "row";
-    row.dataset.deployment = d.id;
-    row.dataset.state = d.status.state;
-    const title = document.createElement("strong");
-    title.textContent = d.id + " · " + t(d.status.state) + " · " + d.backend;
-    const detail = document.createElement("p");
-    detail.className = "muted";
-    detail.textContent = [
-      d.model,
-      d.status.error ? errorText(d.status.error) : "",
-      deploymentTests.get(d.id),
-    ]
-      .filter(Boolean)
-      .join(" · ");
-    row.append(title, detail);
-    for (const action of [
-      "view",
-      "start",
-      "stop",
-      "restart",
-      "test",
-      "openUI",
-      "edit",
-      "rollbackModel",
-      "removeDeployment",
-    ]) {
-      if (
-        (action === "edit" ||
-          action === "removeDeployment" ||
-          action === "rollbackModel") &&
-        d.id === current.settings.model
-      )
-        continue;
-      if (action === "rollbackModel" && !d.previous_model) continue;
-      const b = button("");
-      b.className = "secondary";
-      b.textContent = t(action);
-      const inDetail = page === "deployment-detail" && editingID === d.id;
-      b.hidden = inDetail
-        ? action === "view"
-        : !["start", "stop", "view"].includes(action);
-      b.disabled =
-        ["starting", "loading", "stopping"].includes(d.status.state) ||
-        (action === "start" && d.status.state === "running") ||
-        (action === "stop" && d.status.state === "stopped") ||
-        (["test", "openUI"].includes(action) && d.status.state !== "running");
-      b.onclick = (event) => {
-        const control = event.currentTarget;
-        if (control.disabled) return;
-        control.disabled = true;
-        void runOperation("list-action", async (trace) => {
-          const { api, nativeCommand } = scoped(trace);
-
-          b.disabled = true;
-          try {
-            if (action === "view") {
-              go("instances/" + encodeURIComponent(d.id) + "/run");
-              return;
-            }
-            if (action === "test") {
-              const start = performance.now();
+    const inDetail = page === "deployment-detail" && editingID === d.id;
+    const row = deploymentCard(
+      { ...d, legacy: d.id === current.settings.model },
+      op,
+      {
+        t,
+        errorText,
+        endpoint: managerEndpoint,
+        token: $("token").value,
+        testResult: deploymentTests.get(d.id),
+        inDetail,
+        act: (key, d, op) =>
+          runOperation("deployment-action", async (trace) => {
+            const { api, nativeCommand } = scoped(trace);
+            if (key === "view")
+              return go("instances/" + encodeURIComponent(d.id) + "/run");
+            if (key === "edit") return editDeployment(d);
+            if (key === "testAPI") {
+              const started = performance.now();
               const result = await api("/v1/chat/completions", {
                 model: d.id,
                 messages: [
@@ -1554,16 +1545,33 @@ function renderDeployments(items) {
                 d.id,
                 content +
                   " · " +
-                  ((performance.now() - start) / 1000).toFixed(2) +
+                  ((performance.now() - started) / 1000).toFixed(2) +
                   " s",
               );
-            } else if (action === "edit") editDeployment(d);
-            else if (action === "rollbackModel")
+            } else if (key === "cancel")
+              await api("/api/v1/tasks/cancel", { id: op.id });
+            else if (["start", "retry", "retryCPU"].includes(key)) {
+              deploymentTests.delete(d.id);
+              const body =
+                ["retry", "retryCPU"].includes(key) && op?.prepare
+                  ? { ...op.prepare }
+                  : { id: d.id };
+              if (key === "retryCPU") {
+                body.backend = "cpu";
+                body.recommend = false;
+              }
+              await api("/api/v1/deployments/prepare", body);
+            } else if (key === "stop") {
+              deploymentTests.delete(d.id);
+              await api("/api/v1/runtime/stop", { id: d.id });
+            } else if (key === "rollbackModel")
               await api("/api/v1/deployments/rollback", { id: d.id });
-            else if (action === "removeDeployment") {
-              if (await confirmNative("confirm-delete", t("confirmDelete")))
-                await api("/api/v1/deployments/delete", { id: d.id });
-            } else if (action === "openUI") {
+            else if (key === "removeDeployment") {
+              if (!(await confirmNative("confirm-delete", t("confirmDelete"))))
+                return;
+              await api("/api/v1/deployments/delete", { id: d.id });
+              go("instances");
+            } else if (key === "openUI") {
               if (desktopMode) await nativeCommand("open-ui", d.id);
               else
                 window.open(
@@ -1571,39 +1579,66 @@ function renderDeployments(items) {
                   "_blank",
                   "noopener",
                 );
-            } else await api("/api/v1/runtime/" + action, { id: d.id });
+            }
             await load(trace);
-          } catch (e) {
-            throw e;
-          } finally {
-            b.disabled = false;
-          }
-        })
-          .catch(actionError)
-          .finally(() => {
-            control.disabled = false;
-          });
-      };
-      row.append(b);
-    }
-    if (page === "deployment-detail" && editingID === d.id)
-      $("deployment-run").replaceChildren(row);
+          }),
+      },
+    );
+    const connection = row.querySelector("details[data-connection]");
+    if (connection && open.has(d.id)) connection.open = true;
+    if (inDetail) $("deployment-run").replaceChildren(row);
     else root.append(row);
   }
   filterDeployments();
   if ([...$("api-instance").options].some((o) => o.value === selection))
     $("api-instance").value = selection;
+  if (focusID && focusAction)
+    for (const row of document.querySelectorAll("[data-deployment]")) {
+      if (row.dataset.deployment === focusID)
+        [...row.querySelectorAll("button")]
+          .find((e) => e.dataset.action === focusAction)
+          ?.focus();
+    }
+}
+function suggestedID(model = $("deployment-model").value.split("@")[0]) {
+  const base =
+    (model || "model")
+      .replace(/[^a-zA-Z0-9._-]/g, "-")
+      .replace(/^[^a-zA-Z0-9]+/, "")
+      .slice(0, 75) || "model";
+  const ids = new Set((current?.deployments || []).map((d) => d.id));
+  let id = base,
+    n = 2;
+  while (ids.has(id) || ["default", "new"].includes(id)) id = base + "-" + n++;
+  return id;
+}
+function chooseDeploymentModel(m) {
+  go("instances/new/config");
+  renderRoute();
+  $("deployment-model").value = m.id + "@" + m.version;
+  $("deployment-id").value = suggestedID(m.id);
+  $("deployment-recommend").checked = true;
+  rememberDeployment();
 }
 async function populateInstalled(data) {
   data ||= await api("/api/v1/models");
   const selected = $("deployment-model").value;
   $("deployment-model").replaceChildren();
-  for (const m of data.models || []) {
-    if (m.kind !== "model") continue;
+  const combined = [...(data.models || []).filter((m) => m.kind === "model")];
+  for (const m of assets?.models || [])
+    if (
+      !combined.some((item) => item.id === m.id && item.version === m.version)
+    )
+      combined.push({
+        ...m,
+        repository: m.repository || $("model-repository").value,
+      });
+  for (const m of combined) {
     const o = document.createElement("option");
     o.value = m.id + "@" + m.version;
     o.textContent = (m.name || m.id) + " · " + m.version.slice(0, 8);
     o.dataset.format = m.format || "gguf";
+    o.dataset.repository = m.repository || "";
     $("deployment-model").append(o);
   }
   if ([...$("deployment-model").options].some((o) => o.value === selected))
@@ -1631,28 +1666,19 @@ bind("recommend-deployment", async (trace) => {
 });
 bind("save-deployment", async (trace) => {
   const { api, nativeCommand } = scoped(trace);
-  if (!recommendation) {
-    const [model, version] = $("deployment-model").value.split("@");
-    recommendation = await api(
-      "/api/v1/recommend?model=" +
-        encodeURIComponent(model) +
-        "&version=" +
-        encodeURIComponent(version),
-    );
-  }
-  if (
-    recommendation?.warnings.length &&
-    !(await confirmNative(
-      "warning-memory",
-      recommendation.warnings.map(t).join("\n"),
-    ))
-  )
-    return;
   const savedDraft = drafts.snapshot();
   const savedID = $("deployment-id").value.trim();
   const [model, model_version] = $("deployment-model").value.split("@");
-  await api("/api/v1/deployments", {
+  if (!model) throw Error(t("chooseModel"));
+  const existing = current.deployments.find((d) => d.id === savedID);
+  const restart = existing?.status.state === "running";
+  if (restart && !(await confirmAction(t("confirmRestart")))) return;
+  await api("/api/v1/deployments/prepare", {
     id: savedID,
+    repository:
+      $("deployment-model").selectedOptions[0]?.dataset.repository || "",
+    recommend: $("deployment-recommend").checked,
+    restart,
     model,
     model_version,
     backend: $("deployment-backend").value,
@@ -1685,11 +1711,13 @@ bind("save-deployment", async (trace) => {
     deploymentDrafts.delete(editingID);
     editingID = "";
   }
-  toast(t("saved"));
+  toast(t("prepareAccepted"));
   await load(trace);
   if (!stillEditing) go("instances/" + encodeURIComponent(savedID) + "/run");
 });
 $("deployment-model").onchange = () => {
+  if (editingID === "new" && !drafts.has("deployment-id"))
+    $("deployment-id").value = suggestedID();
   $("deployment-isq").disabled =
     $("deployment-model").selectedOptions[0]?.dataset.format !== "safetensors";
   if ($("deployment-isq").disabled) $("deployment-isq").value = "";
@@ -1827,6 +1855,11 @@ addEventListener("beforeunload", (e) => {
     e.returnValue = "";
   }
 });
+setupDeploymentLayout();
+for (const [key, [zh, en]] of Object.entries(deploymentMessages)) {
+  messages["zh-CN"][key] = zh;
+  messages["en-US"][key] = en;
+}
 renderRoute();
 boot()
   .then(async () => {

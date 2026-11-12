@@ -58,20 +58,23 @@ type State struct {
 	DegradedCPU bool      `json:"degraded_cpu,omitempty"`
 }
 type Operation struct {
-	DeploymentID string    `json:"deployment_id,omitempty"`
-	Detail       string    `json:"detail,omitempty"`
-	AssetKind    string    `json:"asset_kind,omitempty"`
-	AssetID      string    `json:"asset_id,omitempty"`
-	Source       string    `json:"source,omitempty"`
-	ID           string    `json:"id"`
-	Kind         string    `json:"kind"`
-	State        string    `json:"state"`
-	Progress     int64     `json:"progress"`
-	Total        int64     `json:"total"`
-	Step         string    `json:"step"`
-	Error        string    `json:"error,omitempty"`
-	TraceID      string    `json:"trace_id"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	Prepare      *PrepareRequest `json:"prepare,omitempty"`
+	PrepareKey   string          `json:"prepare_key,omitempty"`
+	SpanTrace    string          `json:"span_trace,omitempty"`
+	DeploymentID string          `json:"deployment_id,omitempty"`
+	Detail       string          `json:"detail,omitempty"`
+	AssetKind    string          `json:"asset_kind,omitempty"`
+	AssetID      string          `json:"asset_id,omitempty"`
+	Source       string          `json:"source,omitempty"`
+	ID           string          `json:"id"`
+	Kind         string          `json:"kind"`
+	State        string          `json:"state"`
+	Progress     int64           `json:"progress"`
+	Total        int64           `json:"total"`
+	Step         string          `json:"step"`
+	Error        string          `json:"error,omitempty"`
+	TraceID      string          `json:"trace_id"`
+	UpdatedAt    time.Time       `json:"updated_at"`
 }
 type Installed struct {
 	catalog.Asset
@@ -86,6 +89,7 @@ type App struct {
 	persist                  sync.Mutex
 	lifecycle                sync.Mutex
 	taskStart                sync.Mutex
+	resourceQueue            chan struct{}
 	addr, dataDir, statePath string
 	config                   Config
 	state                    State
@@ -130,6 +134,7 @@ func New(addr, dir string) (*App, error) {
 	a := &App{addr: addr, dataDir: dir, statePath: filepath.Join(dir, "state.json"), cancels: map[string]context.CancelFunc{}, deployments: map[string]*App{}, closed: make(chan struct{}), client: &http.Client{}, state: State{State: "stopped", UpdatedAt: time.Now().UTC()}}
 	a.catalog = catalog.Client{HTTP: &http.Client{Timeout: 30 * time.Second}, SupplementTagPrefix: SupplementTagPrefix}
 	a.instanceID = randomToken()[:16]
+	a.resourceQueue = make(chan struct{}, 1)
 	a.config = Config{Token: randomToken(), Backend: "auto", Model: catalog.DefaultModel, AutoStart: true, IdleMinutes: 10}
 	b, err := os.ReadFile(a.statePath)
 	if err == nil {
@@ -314,6 +319,9 @@ func (a *App) operationTrace(id string) string {
 	defer a.mu.Unlock()
 	for _, op := range a.operations {
 		if op.ID == id {
+			if validTraceparent(op.SpanTrace) {
+				return op.SpanTrace
+			}
 			return op.TraceID
 		}
 	}

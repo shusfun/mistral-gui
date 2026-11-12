@@ -28,6 +28,55 @@ export function empty(node, message) {
   text.textContent = message;
   node.replaceChildren(text);
 }
+export function copyField(label, value, copied, secret = false) {
+  const row = document.createElement("div"),
+    field = document.createElement("label"),
+    input = document.createElement("input"),
+    actions = document.createElement("div");
+  row.className = "copy-field";
+  field.textContent = label;
+  input.readOnly = true;
+  input.value = value;
+  input.type = secret ? "password" : "text";
+  field.append(input);
+  actions.className = "actions";
+  const english = document.documentElement.lang.startsWith("en");
+  actions.append(
+    button(english ? "Copy" : "复制", async () => {
+      try {
+        await navigator.clipboard.writeText(input.value);
+        toast(copied);
+      } catch {
+        input.type = "text";
+        input.focus();
+        input.select();
+      }
+    }),
+  );
+  if (secret)
+    actions.append(
+      button(english ? "Show / hide" : "显示 / 隐藏", () => {
+        input.type = input.type === "password" ? "text" : "password";
+      }),
+    );
+  row.append(field, actions);
+  return row;
+}
+export function taskProgress(done, total, label) {
+  const track = document.createElement("div"),
+    fill = document.createElement("div");
+  track.className = "task-progress";
+  track.setAttribute("role", "progressbar");
+  track.setAttribute("aria-label", label);
+  track.setAttribute("aria-valuemin", "0");
+  track.setAttribute("aria-valuemax", "100");
+  const ratio = total > 0 ? Math.max(0, Math.min(1, done / total)) : 0;
+  if (total > 0)
+    track.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
+  fill.style.transform = `scaleX(${ratio})`;
+  track.append(fill);
+  return track;
+}
 export function records(node, items, describe, emptyText) {
   node.replaceChildren();
   if (!items.length) return empty(node, emptyText);

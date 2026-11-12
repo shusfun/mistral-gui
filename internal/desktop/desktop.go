@@ -255,7 +255,7 @@ func (s *Service) InstallUpdate(ctx context.Context, trace, id string) error {
 
 func (s *Service) notifyTask(id string) (bool, error) {
 	op, ok := s.manager.CompletedOperation(id)
-	if !ok || (op.Kind != "install" && op.Kind != "start" && op.Kind != "restart" && op.Kind != "update") {
+	if !ok || (op.Kind != "install" && op.Kind != "start" && op.Kind != "restart" && op.Kind != "update" && op.Kind != "prepare") {
 		return false, nil
 	}
 	s.mu.Lock()

@@ -122,11 +122,6 @@ func (a *App) installModel(ctx context.Context, op string, asset catalog.Asset) 
 	if !exists {
 		a.installed = append(a.installed, Installed{asset, modelPath})
 	}
-	if a.engine == nil {
-		if asset.ID == a.config.Model || a.config.Engine == "" {
-			a.selectModelLocked(Installed{asset, modelPath})
-		}
-	}
 	a.mu.Unlock()
 	return a.save()
 }
