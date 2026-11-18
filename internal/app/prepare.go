@@ -25,6 +25,7 @@ type PrepareRequest struct {
 	Deployment
 	Recommend bool `json:"recommend,omitempty"`
 	Restart   bool `json:"restart,omitempty"`
+	Repair    bool `json:"repair,omitempty"`
 }
 
 func (a *App) acquireResources(ctx context.Context) error {
@@ -206,11 +207,12 @@ func (a *App) prepare(ctx context.Context, id string, v PrepareRequest) error {
 			found, ok := a.modelLocked(v.Model, v.Version)
 			a.mu.Unlock()
 			if ok {
-				if err := verifyInstalledModel(found); err != nil {
+				if err := verifyInstalledModel(found); err == nil {
+					model = found
+					return nil
+				} else if !v.Repair {
 					return fmt.Errorf("model_file_invalid: %w", err)
 				}
-				model = found
-				return nil
 			}
 			assets, err := a.catalogModels(ctx, v.Repository, false)
 			if err != nil {

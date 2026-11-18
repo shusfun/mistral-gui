@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/csv"
+	"github.com/shusfun/mistral-gui/internal/catalog"
 	"net/http"
 	"os/exec"
 	"runtime"
@@ -55,6 +56,17 @@ func detectDevice(ctx context.Context) Device {
 		}
 		d.CUDA = len(d.GPUs) > 0
 	}
+	if dxgiGPUs := enumeratePlatformGPUs(); len(dxgiGPUs) > 0 {
+		existing := map[string]bool{}
+		for _, g := range d.GPUs {
+			existing[strings.ToLower(g.Name)] = true
+		}
+		for _, g := range dxgiGPUs {
+			if !existing[strings.ToLower(g.Name)] {
+				d.GPUs = append(d.GPUs, g)
+			}
+		}
+	}
 	return d
 }
 func (a *App) recommend(w http.ResponseWriter, r *http.Request) {
@@ -68,6 +80,18 @@ func (a *App) recommend(w http.ResponseWriter, r *http.Request) {
 		model, found = a.modelLocked(a.config.Model, a.config.ModelVersion)
 	}
 	a.mu.Unlock()
+	if !found {
+		// Allow hardware recommendation for uninstalled catalog models via size & format query params (M-24).
+		sizeStr := r.URL.Query().Get("size")
+		if sizeVal, err := strconv.ParseInt(sizeStr, 10, 64); err == nil && sizeVal > 0 {
+			fmtName := r.URL.Query().Get("format")
+			if fmtName == "" {
+				fmtName = "gguf"
+			}
+			model = Installed{Asset: catalog.Asset{ID: id, Size: sizeVal, Format: fmtName}}
+			found = true
+		}
+	}
 	if !found {
 		fail(w, 404, "model_not_installed")
 		return

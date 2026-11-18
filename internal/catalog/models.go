@@ -33,16 +33,41 @@ type Repository struct {
 
 var Repositories = []Repository{
 	{ModelRepo, "HY-MT", "gguf", true},
-	{"Qwen/Qwen3-0.6B-GGUF", "Qwen3", "gguf", true}, {"Qwen/Qwen3-1.7B-GGUF", "Qwen3", "gguf", true}, {"Qwen/Qwen3-4B-GGUF", "Qwen3", "gguf", true}, {"Qwen/Qwen3-8B-GGUF", "Qwen3", "gguf", true},
+	{"tencent/HY-MT1.5-7B-GGUF", "HY-MT", "gguf", true},
+	{"Qwen/Qwen3-0.6B-GGUF", "Qwen3", "gguf", true}, {"Qwen/Qwen3-1.7B-GGUF", "Qwen3", "gguf", true}, {"Qwen/Qwen3-4B-GGUF", "Qwen3", "gguf", true}, {"Qwen/Qwen3-8B-GGUF", "Qwen3", "gguf", true}, {"Qwen/Qwen3-14B-GGUF", "Qwen3", "gguf", true},
+	{"Qwen/Qwen2.5-1.5B-Instruct-GGUF", "Qwen2.5", "gguf", true}, {"Qwen/Qwen2.5-3B-Instruct-GGUF", "Qwen2.5", "gguf", true}, {"Qwen/Qwen2.5-7B-Instruct-GGUF", "Qwen2.5", "gguf", true}, {"Qwen/Qwen2.5-14B-Instruct-GGUF", "Qwen2.5", "gguf", true},
+	{"bartowski/gemma-2-2b-it-GGUF", "Gemma-2", "gguf", true}, {"bartowski/gemma-2-9b-it-GGUF", "Gemma-2", "gguf", true}, {"unsloth/gemma-3-4b-it-GGUF", "Gemma-3", "gguf", true}, {"unsloth/gemma-3-12b-it-GGUF", "Gemma-3", "gguf", true},
+	{"bartowski/Llama-3.2-3B-Instruct-GGUF", "Llama-3.2", "gguf", true}, {"bartowski/Meta-Llama-3.1-8B-Instruct-GGUF", "Llama-3.1", "gguf", true},
 	{"Qwen/Qwen3-0.6B", "Qwen3", "safetensors", true}, {"Qwen/Qwen3-1.7B", "Qwen3", "safetensors", true}, {"Qwen/Qwen3-4B", "Qwen3", "safetensors", true}, {"Qwen/Qwen3-8B", "Qwen3", "safetensors", true},
 	{"HuggingFaceTB/SmolLM3-3B", "SmolLM3", "safetensors", true}, {"unsloth/SmolLM3-3B-GGUF", "SmolLM3", "gguf", true},
+}
+
+var windowsReservedNames = map[string]bool{
+	"con": true, "prn": true, "aux": true, "nul": true,
+	"com1": true, "com2": true, "com3": true, "com4": true, "com5": true, "com6": true, "com7": true, "com8": true, "com9": true,
+	"lpt1": true, "lpt2": true, "lpt3": true, "lpt4": true, "lpt5": true, "lpt6": true, "lpt7": true, "lpt8": true, "lpt9": true,
 }
 
 func ValidRepository(s string) bool {
 	return regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$`).MatchString(s)
 }
 func SafeModelPath(s string) bool {
-	return s != "" && !strings.Contains(s, "\\") && !strings.Contains(s, ":") && !strings.HasPrefix(s, "/") && path.Clean(s) == s && s != ".." && !strings.HasPrefix(s, "../")
+	if s == "" || strings.Contains(s, "\\") || strings.Contains(s, ":") || strings.HasPrefix(s, "/") || path.Clean(s) != s || s == ".." || strings.HasPrefix(s, "../") {
+		return false
+	}
+	for _, seg := range strings.Split(s, "/") {
+		if seg == "" || seg == "." || seg == ".." || strings.HasSuffix(seg, ".") || strings.HasSuffix(seg, " ") {
+			return false
+		}
+		stem := seg
+		if dot := strings.IndexByte(seg, '.'); dot >= 0 {
+			stem = seg[:dot]
+		}
+		if windowsReservedNames[strings.ToLower(stem)] {
+			return false
+		}
+	}
+	return true
 }
 func ModelID(repo, variant string) string {
 	sum := sha256.Sum256([]byte(repo + "\n" + variant))
@@ -134,7 +159,7 @@ func (c Client) RepositoryModels(ctx context.Context, repo string) ([]Asset, err
 	source := "official"
 	if !known {
 		source = "custom"
-	} else if strings.HasPrefix(repo, "unsloth/") {
+	} else if strings.HasPrefix(repo, "unsloth/") || strings.HasPrefix(repo, "bartowski/") {
 		source = "community"
 	}
 	var snapshot []ModelFile

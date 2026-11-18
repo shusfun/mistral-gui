@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -130,7 +131,12 @@ func manifest(dir, version, repo string) error {
 	if public != os.Getenv("UPDATE_PUBLIC_KEY") {
 		return fmt.Errorf("UPDATE_PUBLIC_KEY does not match signing key")
 	}
-	m := update.Manifest{Version: version}
+	now := time.Now().UTC()
+	m := update.Manifest{
+		Version:     version,
+		PublishedAt: now.Format(time.RFC3339),
+		ExpiresAt:   now.AddDate(1, 0, 0).Format(time.RFC3339),
+	}
 	var sums []string
 	targets := []struct{ os, arch, install, asset string }{
 		{"windows", "amd64", "mistral-gui-windows-x64-setup.exe", "mistral-gui-windows-x64.update.zip"},

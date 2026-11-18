@@ -203,7 +203,7 @@ func Download(ctx context.Context, r Request) error {
 	if err := os.MkdirAll(filepath.Dir(r.Dest), 0o755); err != nil {
 		return err
 	}
-	steps := r.steps()
+	steps := orderStepsSkippingBadSources(r.steps())
 	n := len(steps)
 	if n == 0 {
 		return errors.New("download_source_missing")
@@ -303,7 +303,10 @@ func Download(ctx context.Context, r Request) error {
 				return nil
 			}
 			_ = os.Remove(r.Dest + ".part")
-			err = fmt.Errorf("%s：%w", host, ErrDigest)
+			if st.url != "" {
+				markBadSource(st.url)
+			}
+			err = fmt.Errorf("digest_mismatch: %s: %w", host, ErrDigest)
 		}
 		if ctx.Err() != nil {
 			r.Log("已取消，保留已下载的部分")
@@ -353,8 +356,61 @@ func partSize(dest string) int64 {
 	return 0
 }
 
+var (
+	badSourcesMu sync.Mutex
+	badSources   = map[string]time.Time{}
+)
+
+const badSourceTTL = 15 * time.Minute
+
+func markBadSource(rawURL string) {
+	badSourcesMu.Lock()
+	defer badSourcesMu.Unlock()
+	badSources[rawURL] = time.Now().Add(badSourceTTL)
+}
+
+// ClearBadSources resets the bad-source cooldown table (intended for tests).
+func ClearBadSources() {
+	badSourcesMu.Lock()
+	defer badSourcesMu.Unlock()
+	badSources = map[string]time.Time{}
+}
+
+func isBadSource(rawURL string) bool {
+	if rawURL == "" {
+		return false
+	}
+	badSourcesMu.Lock()
+	defer badSourcesMu.Unlock()
+	exp, ok := badSources[rawURL]
+	if !ok {
+		return false
+	}
+	if time.Now().After(exp) {
+		delete(badSources, rawURL)
+		return false
+	}
+	return true
+}
+
+func orderStepsSkippingBadSources(in []step) []step {
+	if len(in) <= 1 {
+		return in
+	}
+	good := make([]step, 0, len(in))
+	bad := make([]step, 0, len(in))
+	for _, st := range in {
+		if st.url != "" && isBadSource(st.url) {
+			bad = append(bad, st)
+		} else {
+			good = append(good, st)
+		}
+	}
+	return append(good, bad...)
+}
+
 func (r Request) slowErr(host string, done int64) error {
-	return fmt.Errorf("%s %w：连续 %s 低于 %s/s（已下载 %s）", host, ErrSlow, r.SlowFor, Size(r.MinSpeed), Size(done))
+	return fmt.Errorf("download_slow_source: %s %w：连续 %s 低于 %s/s（已下载 %s）", host, ErrSlow, r.SlowFor, Size(r.MinSpeed), Size(done))
 }
 
 // source 从非 HTTP 来源完整下载到 .part（不续传）。

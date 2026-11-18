@@ -47,4 +47,38 @@ func TestRejectTraversalLinksAndOversize(t *testing.T) {
 	if b, e := os.ReadFile(filepath.Join(dest, "bin", "engine")); e != nil || string(b) != "fixture" {
 		t.Fatal("bad extraction")
 	}
+
+	// M-S16: corrupting stored zip payload bytes must trigger CRC32 failure at EOF
+	corruptZip := filepath.Join(t.TempDir(), "corrupt.zip")
+	f, e := os.Create(corruptZip)
+	if e != nil {
+		t.Fatal(e)
+	}
+	w := zip.NewWriter(f)
+	out, e := w.CreateHeader(&zip.FileHeader{Name: "payload.bin", Method: zip.Store})
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, _ = out.Write([]byte("0123456789abcdef"))
+	_ = w.Close()
+	_ = f.Close()
+	raw, e := os.ReadFile(corruptZip)
+	if e != nil {
+		t.Fatal(e)
+	}
+	idx := -1
+	for i := 0; i <= len(raw)-16; i++ {
+		if string(raw[i:i+16]) == "0123456789abcdef" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatal("stored payload not found")
+	}
+	raw[idx] ^= 0xff
+	_ = os.WriteFile(corruptZip, raw, 0600)
+	if e := Extract(corruptZip, t.TempDir(), 1024); e == nil {
+		t.Fatal("corrupt zip CRC accepted without error")
+	}
 }

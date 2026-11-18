@@ -237,6 +237,7 @@ func RunGuard(path string) error {
 		if !launched.IsZero() {
 			req, _ := http.NewRequest("GET", "http://"+t.Addr+"/healthz", nil)
 			req.Header.Set("traceparent", t.Trace)
+			req.Header.Set("X-Mistral-Update-Transaction", t.ID)
 			resp, e := client.Do(req)
 			if e == nil {
 				var h struct {
@@ -309,11 +310,35 @@ func withoutTransaction(env []string) []string {
 	}
 	return out
 }
+func pruneGuardArtifacts(t transaction) {
+	// Retain only the latest recovery directory (t.ID) and clean stale .failed-* siblings (M-S19).
+	recRoot := filepath.Join(t.Dir, "updates", "recovery")
+	if entries, err := os.ReadDir(recRoot); err == nil {
+		for _, entry := range entries {
+			if entry.Name() != t.ID {
+				_ = os.RemoveAll(filepath.Join(recRoot, entry.Name()))
+			}
+		}
+	}
+	targetDir := filepath.Dir(t.Target)
+	base := filepath.Base(t.Target)
+	if entries, err := os.ReadDir(targetDir); err == nil {
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), base+".failed-") {
+				_ = os.RemoveAll(filepath.Join(targetDir, entry.Name()))
+			}
+		}
+	}
+}
+
 func guardResult(t transaction, state string, cause error) error {
 	t.State = state
 	path := filepath.Join(t.Dir, "updates", "recovery", t.ID, "transaction.json")
 	if e := writeTransaction(path, t); e != nil {
 		return e
+	}
+	if state == "complete" {
+		pruneGuardArtifacts(t)
 	}
 	if b, e := os.ReadFile(launchPointer()); e == nil && string(b) == path {
 		_ = os.Remove(launchPointer())

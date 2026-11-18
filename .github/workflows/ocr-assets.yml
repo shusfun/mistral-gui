@@ -1,0 +1,56 @@
+name: build-ocr-runtime-assets
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag for OCR runtime bundle
+        default: ocr-v1.4.4
+        required: true
+permissions:
+  contents: write
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build isolated Python + RapidOCR (PP-OCRv4 ONNX) bundle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force ocr-dist/python | Out-Null
+          Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip" -OutFile python-embed.zip
+          Expand-Archive python-embed.zip -DestinationPath ocr-dist/python
+          Add-Content -Path "ocr-dist/python/python311._pth" -Value "`nimport site`nLib/site-packages"
+          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile get-pip.py
+          & ocr-dist/python/python.exe get-pip.py --no-warn-script-location
+          if ($LASTEXITCODE) { throw 'pip bootstrap failed' }
+          & ocr-dist/python/python.exe -m pip install --no-cache-dir rapidocr_onnxruntime==1.4.4 onnxruntime==1.20.1
+          if ($LASTEXITCODE) { throw 'OCR dependencies failed' }
+          & ocr-dist/python/python.exe -c "from rapidocr_onnxruntime import RapidOCR; RapidOCR(); print('OCR_READY')"
+          if ($LASTEXITCODE) { throw 'OCR initialization failed' }
+          & ocr-dist/python/python.exe -m pip uninstall -y pip setuptools wheel
+          Set-Content -Path "ocr-dist/THIRD-PARTY-NOTICES.txt" -Value "RapidOCR v1.4.4 & PaddleOCR PP-OCRv4 (Apache-2.0)`nONNX Runtime v1.20.1 (MIT)`nPython 3.11.9 Embeddable (PSF License)"
+          New-Item -ItemType Directory -Force runtime-dist | Out-Null
+          Compress-Archive -Path ocr-dist/* -DestinationPath runtime-dist/rapidocr-ppocrv4-windows-amd64.zip
+      - name: Compute SHA256SUMS and sign archive
+        shell: pwsh
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          UPDATE_PUBLIC_KEY: ${{ vars.UPDATE_PUBLIC_KEY }}
+        run: |
+          $hash = (Get-FileHash runtime-dist/rapidocr-ppocrv4-windows-amd64.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  rapidocr-ppocrv4-windows-amd64.zip" | Out-File -Encoding ascii runtime-dist/SHA256SUMS
+          go run ./cmd/sign-assets --dir runtime-dist
+          if ($LASTEXITCODE) { throw 'OCR signing failed' }
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          prerelease: true
+          make_latest: false
+          fail_on_unmatched_files: true
+          files: |
+            runtime-dist/rapidocr-ppocrv4-windows-amd64.zip
+            runtime-dist/rapidocr-ppocrv4-windows-amd64.zip.sig
+            runtime-dist/SHA256SUMS

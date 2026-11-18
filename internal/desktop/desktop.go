@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -36,6 +37,7 @@ type Service struct {
 	notified          map[string]bool
 	notificationOrder []string
 	confirmations     map[string]chan bool
+	lastScreenshot    map[string]any
 }
 
 func (s *Service) RefreshMenus() {
@@ -52,6 +54,30 @@ func (s *Service) text(zh, en string) string {
 }
 func (s *Service) Show()       { s.window.Show(); s.window.Restore(); s.window.Focus() }
 func (s *Service) Ready() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.ready }
+
+func (s *Service) captureAndStore(hideWindowFirst bool) (map[string]any, error) {
+	if hideWindowFirst && s.window != nil {
+		s.window.Hide()
+		time.Sleep(150 * time.Millisecond)
+	}
+	dataURL, width, height, err := captureVirtualScreenPNG()
+	if hideWindowFirst && s.window != nil {
+		s.Show()
+	}
+	if err != nil {
+		return nil, err
+	}
+	shot := map[string]any{
+		"image_base64": dataURL,
+		"width":        width,
+		"height":       height,
+		"captured_at":  time.Now().UTC().Format(time.RFC3339),
+	}
+	s.mu.Lock()
+	s.lastScreenshot = shot
+	s.mu.Unlock()
+	return shot, nil
+}
 func (s *Service) Command(kind, value, trace string) (any, error) {
 	s.manager.NativeTrace(kind, trace)
 	switch kind {
@@ -114,6 +140,14 @@ func (s *Service) Command(kind, value, trace string) (any, error) {
 		return s.manager.ImportModel(path, trace)
 	case "update":
 		return s.manager.DesktopUpdate(trace), nil
+	case "capture-screen":
+		return s.captureAndStore(true)
+	case "consume-screenshot":
+		s.mu.Lock()
+		shot := s.lastScreenshot
+		s.lastScreenshot = nil
+		s.mu.Unlock()
+		return shot, nil
 	case "quit":
 		s.manager.Close()
 		s.host.Quit()
@@ -135,17 +169,33 @@ func Run(manager *app.App, hidden bool) error {
 	} else {
 		tray.SetIcon(icons.SystrayLight)
 	}
+	triggerScreenshot := func() {
+		shot, err := s.captureAndStore(true)
+		s.Show()
+		s.window.SetURL("/manage?desktop=1#translate")
+		if err != nil {
+			s.host.Event.Emit("desktop:screenshot-captured", map[string]any{"error": err.Error()})
+			return
+		}
+		s.host.Event.Emit("desktop:screenshot-captured", shot)
+	}
 	buildMenu := func() *application.Menu {
 		menu := s.host.NewMenu()
 		menu.Add(s.text("显示窗口", "Show window")).OnClick(func(*application.Context) { s.Show() })
+		menu.Add(s.text("截图翻译", "Screenshot translate")).OnClick(func(*application.Context) {
+			go triggerScreenshot()
+		})
 		menu.Add(s.text("检查更新", "Check for updates")).OnClick(func(*application.Context) {
 			s.Show()
 			s.window.SetURL("/manage?desktop=1#updates")
 			go func() {
-				_, e := s.CheckUpdate(context.Background())
+				res, e := s.CheckUpdate(context.Background())
 				if e != nil {
 					slog.Error("update.check", "error", e)
+					s.host.Event.Emit("desktop:update-checked", map[string]any{"error": e.Error()})
+					return
 				}
+				s.host.Event.Emit("desktop:update-checked", map[string]any{"result": res})
 			}()
 		})
 		menu.AddSeparator()
@@ -163,6 +213,7 @@ func Run(manager *app.App, hidden bool) error {
 		}
 		managerMenu := menu.AddSubmenu(s.text("管理器", "Manager"))
 		managerMenu.Add(s.text("显示窗口", "Show window")).OnClick(func(*application.Context) { s.Show() })
+		managerMenu.Add(s.text("截图翻译", "Screenshot translate")).OnClick(func(*application.Context) { go triggerScreenshot() })
 		managerMenu.Add(s.text("检查更新", "Check for updates")).OnClick(func(*application.Context) { s.Show(); s.window.SetURL("/manage?desktop=1#updates") })
 		managerMenu.Add(s.text("退出", "Quit")).OnClick(func(*application.Context) { manager.Close(); s.host.Quit() })
 		s.host.Menu.Set(menu)
@@ -184,6 +235,7 @@ func Run(manager *app.App, hidden bool) error {
 		}
 	}
 	go func() { <-manager.Closed(); s.host.Quit() }()
+	startPlatformHotkeyLoop(manager.Closed(), manager.ScreenshotHotkey, triggerScreenshot)
 	go func() {
 		ticker := time.NewTicker(6 * time.Hour)
 		defer ticker.Stop()
@@ -201,18 +253,29 @@ func Run(manager *app.App, hidden bool) error {
 	return s.host.Run()
 }
 func (s *Service) CheckUpdate(ctx context.Context) (any, error) {
+	if app.UpdateRepository == "" || app.UpdatePublicKey == "" {
+		return nil, errors.New("update_repository_unconfigured")
+	}
 	r, e := s.host.Updater.Check(ctx)
 	if e != nil {
 		return nil, e
 	}
 	if r == nil {
-		return map[string]any{"available": false}, nil
+		return map[string]any{"available": false, "current": app.Version}, nil
 	}
 	s.mu.Lock()
 	s.version = r.Version
 	s.mu.Unlock()
-	return map[string]any{"available": true, "manifest": map[string]any{"version": r.Version, "notes": r.Notes}}, nil
+	return map[string]any{"available": true, "current": app.Version, "manifest": map[string]any{"version": r.Version, "notes": r.Notes}}, nil
 }
+
+func cleanupWailsStagingDirs() {
+	matches, _ := filepath.Glob(filepath.Join(os.TempDir(), "wails-update-*"))
+	for _, m := range matches {
+		_ = os.RemoveAll(m)
+	}
+}
+
 func (s *Service) InstallUpdate(ctx context.Context, trace, id string) error {
 	ctx = withDownloadTrace(ctx, trace)
 	s.mu.Lock()
@@ -233,11 +296,14 @@ func (s *Service) InstallUpdate(ctx context.Context, trace, id string) error {
 	})
 	defer off()
 	if e := s.host.Updater.DownloadAndInstall(ctx); e != nil {
+		cleanupWailsStagingDirs()
 		return e
 	}
-	s.manager.UpdateProgress(id, 1, 1, "ready")
+	s.manager.UpdateProgress(id, 0, 0, "update_ready")
 	if !s.confirm(ctx, trace, s.text("更新已准备好。立即停止模型并重启？", "The update is ready. Stop models and restart now?")) {
-		return nil
+		// Declining restart removes staged Wails files and marks the task cancelled (M-S26).
+		cleanupWailsStagingDirs()
+		return app.ErrUserCancelled
 	}
 	s.mu.Lock()
 	version := s.version

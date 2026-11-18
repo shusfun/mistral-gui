@@ -15,20 +15,21 @@ const ModelRepo = "tencent/HY-MT1.5-1.8B-GGUF"
 const DefaultModel = "HY-MT1.5-1.8B-Q4_K_M.gguf"
 
 type Asset struct {
-	Repository string      `json:"repository,omitempty"`
-	Format     string      `json:"format,omitempty"`
-	Files      []ModelFile `json:"files,omitempty"`
-	ID         string      `json:"id"`
-	Kind       string      `json:"kind"`
-	Version    string      `json:"version"`
-	OS         string      `json:"os"`
-	Arch       string      `json:"arch"`
-	Backend    string      `json:"backend"`
-	URL        string      `json:"url"`
-	SHA256     string      `json:"sha256"`
-	Size       int64       `json:"size"`
-	Source     string      `json:"source"`
-	Name       string      `json:"name"`
+	Repository   string      `json:"repository,omitempty"`
+	Format       string      `json:"format,omitempty"`
+	Files        []ModelFile `json:"files,omitempty"`
+	SignatureURL string      `json:"signature_url,omitempty"`
+	ID           string      `json:"id"`
+	Kind         string      `json:"kind"`
+	Version      string      `json:"version"`
+	OS           string      `json:"os"`
+	Arch         string      `json:"arch"`
+	Backend      string      `json:"backend"`
+	URL          string      `json:"url"`
+	SHA256       string      `json:"sha256"`
+	Size         int64       `json:"size"`
+	Source       string      `json:"source"`
+	Name         string      `json:"name"`
 }
 type Release struct {
 	Tag    string `json:"tag_name"`
@@ -91,17 +92,26 @@ func (c Client) Engine(ctx context.Context, repo, tag, goos, arch, backend strin
 		return Asset{}, errors.New("platform_unsupported")
 	}
 	baseName := "mistralrs-" + backend + "-" + target
+	sigURLs := map[string]string{}
+	for _, a := range r.Assets {
+		if strings.HasSuffix(a.Name, ".sig") {
+			sigURLs[strings.TrimSuffix(a.Name, ".sig")] = a.URL
+		}
+	}
 	for _, a := range r.Assets {
 		if a.Name == baseName+".zip" || a.Name == baseName+".tar.gz" || a.Name == baseName+".tar.zst" {
 			sum := strings.TrimPrefix(a.Digest, "sha256:")
 			if len(sum) != 64 {
 				return Asset{}, errors.New("official_digest_missing")
 			}
+			if c.API == "" && !strings.HasPrefix(a.URL, "https://github.com/"+repo+"/releases/download/") {
+				return Asset{}, errors.New("asset_url_invalid")
+			}
 			source := "official"
 			if repo != Upstream {
 				source = "supplement"
 			}
-			return Asset{ID: a.Name, Name: a.Name, Kind: "engine", Version: r.Tag, OS: goos, Arch: arch, Backend: backend, URL: a.URL, SHA256: sum, Size: a.Size, Source: source}, nil
+			return Asset{ID: a.Name, Name: a.Name, Kind: "engine", Version: r.Tag, OS: goos, Arch: arch, Backend: backend, URL: a.URL, SignatureURL: sigURLs[a.Name], SHA256: sum, Size: a.Size, Source: source}, nil
 		}
 	}
 	return Asset{}, errors.New("asset_missing")

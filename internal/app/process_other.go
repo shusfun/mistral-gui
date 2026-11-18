@@ -4,7 +4,9 @@ package app
 
 import (
 	"io"
+	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -15,6 +17,25 @@ func nvidiaSMI() string            { return "nvidia-smi" }
 func terminateProcess(c *exec.Cmd) { _ = syscall.Kill(-c.Process.Pid, syscall.SIGTERM) }
 func vcRuntimeAvailable() bool     { return true }
 func memoryInfo() (uint64, uint64) {
+	if runtime.GOOS == "linux" {
+		b, e := os.ReadFile("/proc/meminfo")
+		if e != nil {
+			return 0, 0
+		}
+		var totalKB, availKB uint64
+		for _, line := range strings.Split(string(b), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				switch fields[0] {
+				case "MemTotal:":
+					totalKB, _ = strconv.ParseUint(fields[1], 10, 64)
+				case "MemAvailable:":
+					availKB, _ = strconv.ParseUint(fields[1], 10, 64)
+				}
+			}
+		}
+		return totalKB << 10, availKB << 10
+	}
 	b, e := exec.Command("/usr/sbin/sysctl", "-n", "hw.memsize").Output()
 	if e != nil {
 		return 0, 0

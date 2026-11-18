@@ -6,11 +6,11 @@ import (
 	"net/http"
 )
 
-//go:embed static/*
+//go:embed static
 var web embed.FS
 
 func (a *App) manage(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	sub, _ := fs.Sub(web, "static")
 	if r.URL.Path == "/manage" || r.URL.Path == "/manage/" {

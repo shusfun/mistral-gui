@@ -26,6 +26,7 @@ func main() {
 	if !filepath.IsAbs(r.Target) || r.Staged != r.Target+".next" || (!strings.HasSuffix(r.Target, "mistral-gui.exe") && !strings.HasSuffix(r.Target, "mistral-gui.app")) {
 		os.Exit(1)
 	}
+	_ = update.RecoverInterruptedTarget(r.Target)
 	if e = update.Apply(r); e != nil {
 		fmt.Fprintln(os.Stderr, e)
 		os.Exit(1)

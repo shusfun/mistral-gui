@@ -50,6 +50,9 @@ func (a *App) installModel(ctx context.Context, op string, asset catalog.Asset) 
 	if len(asset.Files) == 0 {
 		return errors.New("model_files_missing")
 	}
+	if e := checkDiskSpace(a.dataDir, asset.Size*2); e != nil {
+		return e
+	}
 	root := filepath.Join(a.dataDir, "models", asset.ID, asset.Version)
 	stage := root + ".staging"
 	if e := os.MkdirAll(stage, 0700); e != nil {
@@ -100,11 +103,20 @@ func (a *App) installModel(ctx context.Context, op string, asset catalog.Asset) 
 		}
 	}
 	a.changeOp(op, func(o *Operation) { o.Step = "verifying" })
-	if _, e := os.Stat(root); e == nil {
-		if e = verifyModelFiles(root, asset.Files); e != nil {
-			return fmt.Errorf("model_existing_corrupt: %w", e)
-		}
+	if e := verifyModelFiles(stage, asset.Files); e != nil {
 		_ = os.RemoveAll(stage)
+		return e
+	}
+	// Replace corrupt pre-existing directory instead of permanently failing with model_existing_corrupt (M-S03).
+	if _, e := os.Stat(root); e == nil {
+		if verifyModelFiles(root, asset.Files) == nil {
+			_ = os.RemoveAll(stage)
+		} else {
+			_ = os.RemoveAll(root)
+			if e = os.Rename(stage, root); e != nil {
+				return e
+			}
+		}
 	} else if e = os.Rename(stage, root); e != nil {
 		return e
 	}

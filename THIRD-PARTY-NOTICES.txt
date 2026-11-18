@@ -1,0 +1,28 @@
+mistral-gui Third-Party Software Notices
+========================================
+
+1. Preact (^10.25.0)
+   Repository: https://github.com/preactjs/preact
+   License: MIT
+   Copyright (c) 2015-present Jason Miller
+
+2. Vite (^6.2.0, frontend build tool)
+   Repository: https://github.com/vitejs/vite
+   License: MIT
+   Copyright (c) 2019-present VoidZero Inc. and Vite contributors
+
+3. Wails v3 (v3.1.0)
+   Repository: https://github.com/wailsapp/wails
+   License: MIT
+   Copyright (c) 2018-present Lea Anthony
+
+4. klauspost/compress (v1.18.7)
+   Repository: https://github.com/klauspost/compress
+   License: BSD-3-Clause / Apache-2.0 / MIT
+
+5. Separately Downloaded On-Demand Runtimes & Models (not bundled in installer):
+   - mistral.rs inference runtime (https://github.com/EricLBuehler/mistral.rs) — MIT License
+   - Python Embeddable Distribution (https://www.python.org/psf-landing/) — PSF License Version 2
+   - RapidOCR / rapidocr_onnxruntime (https://github.com/RapidAI/RapidOCR) — Apache License 2.0
+   - ONNX Runtime (https://github.com/microsoft/onnxruntime) — MIT License
+   - PaddleOCR PP-OCRv4 ONNX Models (https://github.com/PaddlePaddle/PaddleOCR) — Apache License 2.0

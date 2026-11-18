@@ -63,16 +63,40 @@ func Apply(r ApplyRequest) error {
 		}
 	}
 	var err error
-	for i := 0; i < 120; i++ {
-		err = os.Rename(r.Target, backup)
-		if err == nil {
-			break
+	if strings.HasSuffix(strings.ToLower(r.Target), ".exe") {
+		// Copy target to .previous first and atomically replace via MoveFileEx so target never disappears mid-update (M-S06).
+		if b, e := os.ReadFile(r.Target); e == nil {
+			if e = os.WriteFile(backup, b, 0700); e != nil {
+				result("failed", e)
+				return e
+			}
+		} else {
+			result("failed", e)
+			return e
 		}
-		time.Sleep(250 * time.Millisecond)
-	}
-	if err != nil {
-		result("failed", err)
-		return err
+		for i := 0; i < 120; i++ {
+			err = atomicReplaceTarget(r.Staged, r.Target)
+			if err == nil {
+				break
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		if err != nil {
+			result("failed", err)
+			return err
+		}
+	} else {
+		for i := 0; i < 120; i++ {
+			err = os.Rename(r.Target, backup)
+			if err == nil {
+				break
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		if err != nil {
+			result("failed", err)
+			return err
+		}
 	}
 	rollback := func(cause error) error {
 		_ = os.RemoveAll(r.Target)
@@ -87,8 +111,10 @@ func Apply(r ApplyRequest) error {
 		result("rolled_back", cause)
 		return cause
 	}
-	if err = os.Rename(r.Staged, r.Target); err != nil {
-		return rollback(err)
+	if !strings.HasSuffix(strings.ToLower(r.Target), ".exe") {
+		if err = os.Rename(r.Staged, r.Target); err != nil {
+			return rollback(err)
+		}
 	}
 	cmd := exec.Command(r.Executable, r.Args...)
 	hideWindow(cmd)
@@ -113,6 +139,7 @@ func Apply(r ApplyRequest) error {
 			e = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&h)
 			resp.Body.Close()
 			if resp.StatusCode == 200 && e == nil && h.OK && h.Service == "mistral-gui" && h.Version == r.Version && h.Instance != "" && h.Instance != r.PreviousInstance {
+				pruneTargetArtifacts(r.Target)
 				result("complete", nil)
 				return nil
 			}
@@ -157,4 +184,36 @@ func validApplyTrace(trace string) bool {
 		}
 	}
 	return trace[3:35] != strings.Repeat("0", 32) && trace[36:52] != strings.Repeat("0", 16)
+}
+
+// RecoverInterruptedTarget restores <target>.previous if <target> went missing during an interrupted update (M-S06).
+func RecoverInterruptedTarget(target string) error {
+	if target == "" {
+		return nil
+	}
+	if _, err := os.Stat(target); err == nil {
+		return nil
+	}
+	backup := target + ".previous"
+	if _, err := os.Stat(backup); err != nil {
+		return nil
+	}
+	return os.Rename(backup, target)
+}
+
+// pruneTargetArtifacts removes stale .failed-* and temporary unpack trees while preserving the single latest .previous backup (M-S19).
+func pruneTargetArtifacts(target string) {
+	dir := filepath.Dir(target)
+	base := filepath.Base(target)
+	_ = os.RemoveAll(filepath.Join(dir, ".mistral-gui-unpack"))
+	_ = os.RemoveAll(target + ".next")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), base+".failed-") {
+			_ = os.RemoveAll(filepath.Join(dir, entry.Name()))
+		}
+	}
 }

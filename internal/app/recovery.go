@@ -5,21 +5,31 @@ import (
 	"net/http"
 )
 
+// fallbackCPU switches either the default deployment or a specific deployment ID to the CPU runtime (M-R4, M-R2).
 func (a *App) fallbackCPU(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID string `json:"id"`
+	}
+	if r.ContentLength > 0 && decode(r, &req) != nil {
+		fail(w, 400, "invalid_json")
+		return
+	}
+	target, err := a.resolveDeployment(req.ID)
+	if err != nil {
+		fail(w, 404, err.Error())
+		return
+	}
 	a.taskStart.Lock()
 	defer a.taskStart.Unlock()
-	a.mu.Lock()
-	for _, op := range a.operations {
+	for _, op := range a.operationSnapshot() {
 		if op.State == "running" {
-			a.mu.Unlock()
 			fail(w, 409, "task_in_progress")
 			return
 		}
 	}
-	a.mu.Unlock()
 	trace := r.Header.Get("traceparent")
 	op := a.operation("fallback_cpu", trace, func(ctx context.Context, id string) error {
-		a.stopEngine()
+		target.stopEngine()
 		a.mu.Lock()
 		var cpu Installed
 		for _, in := range a.installed {
@@ -45,20 +55,37 @@ func (a *App) fallbackCPU(w http.ResponseWriter, r *http.Request) {
 			a.mu.Unlock()
 		}
 		a.mu.Lock()
-		if a.config.Engine != cpu.Path {
-			a.config.PreviousEngine = a.config.Engine
+		if target == a {
+			if a.config.Engine != cpu.Path {
+				a.config.PreviousEngine = a.config.Engine
+			}
+			a.config.Engine, a.config.EngineVersion, a.config.Backend = cpu.Path, cpu.Version, "cpu"
+		} else {
+			for i := range a.config.Deployments {
+				if a.config.Deployments[i].ID == target.deploymentID {
+					a.config.Deployments[i].Backend = "cpu"
+				}
+			}
 		}
-		a.config.Engine, a.config.EngineVersion, a.config.Backend = cpu.Path, cpu.Version, "cpu"
-		a.state.DegradedCPU = true
 		a.mu.Unlock()
+
+		target.mu.Lock()
+		target.config.Engine, target.config.EngineVersion, target.config.Backend = cpu.Path, cpu.Version, "cpu"
+		target.state.DegradedCPU = true
+		target.mu.Unlock()
+		target.resetCooldown()
+
 		if err := a.save(); err != nil {
 			return err
 		}
-		err := a.ensureEngine(ctx, trace)
+		err := target.ensureEngine(ctx, trace)
 		if ctx.Err() != nil {
-			a.stopEngine()
+			target.stopEngine()
 		}
 		return err
 	})
+	if req.ID != "" {
+		a.changeOp(op.ID, func(o *Operation) { o.DeploymentID = req.ID })
+	}
 	writeJSON(w, 202, op)
 }

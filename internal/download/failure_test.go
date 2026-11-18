@@ -14,6 +14,8 @@ import (
 )
 
 func TestDigestFailureTriesNextSourceAndNeverActivatesCorruption(t *testing.T) {
+	ClearBadSources()
+	defer ClearBadSources()
 	body := []byte("verified asset")
 	sum := sha256.Sum256(body)
 	calls := 0
@@ -33,6 +35,13 @@ func TestDigestFailureTriesNextSourceAndNeverActivatesCorruption(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(dest); string(b) != string(body) {
 		t.Fatal("corrupt asset activated")
+	}
+	// M-S17: Subsequent download skips the penalized bad source and hits /good directly (1 call instead of 2)
+	dest2 := filepath.Join(t.TempDir(), "asset2")
+	calls = 0
+	e = Download(context.Background(), Request{HTTP: s.Client(), URLs: []string{s.URL + "/bad", s.URL + "/good"}, Dest: dest2, SHA256: hex.EncodeToString(sum[:]), MaxSize: 100})
+	if e != nil || calls != 1 {
+		t.Fatalf("expected bad source skipped on next download: %v calls=%d", e, calls)
 	}
 }
 func TestCancellationPreservesPartAndIdleIsBounded(t *testing.T) {

@@ -65,15 +65,8 @@ func TestApplyHealthAndRollback(t *testing.T) {
 			_ = l.Close()
 			data := filepath.Join(dir, "data")
 			t.Cleanup(func() {
-				b, _ := os.ReadFile(filepath.Join(data, "state.json"))
-				var s struct{ Config struct{ Token string } }
-				_ = json.Unmarshal(b, &s)
-				req, _ := http.NewRequest("POST", "http://"+addr+"/api/v1/manager/quit", nil)
-				req.Header.Set("Authorization", "Bearer "+s.Config.Token)
-				client := http.Client{Timeout: time.Second}
-				if resp, e := client.Do(req); e == nil {
-					resp.Body.Close()
-				}
+				quitCmd := exec.Command(executable, "--addr", addr, "--data-dir", data, "--quit")
+				_ = quitCmd.Run()
 				for i := 0; i < 50; i++ {
 					if e := os.Remove(executable); e == nil {
 						return

@@ -141,8 +141,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ASSET_REPO: ${{ github.repository }}
           VERSION: ${{ inputs.version }}
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          UPDATE_PUBLIC_KEY: ${{ vars.UPDATE_PUBLIC_KEY }}
         run: |
           if (!(Test-Path runtime-dist)) { exit 0 }
+          if ($env:UPDATE_SIGNING_KEY) {
+            go run ./cmd/sign-assets --dir runtime-dist
+            if ($LASTEXITCODE) { throw 'Runtime asset signing failed' }
+          }
           $runtimeTag = "runtime-$env:VERSION"
           gh release view $runtimeTag --repo $env:ASSET_REPO
           if ($LASTEXITCODE) { gh release create $runtimeTag --repo $env:ASSET_REPO --prerelease --latest=false --title "mistral.rs $env:VERSION supplemental runtimes" --notes "Only targets missing from the corresponding upstream release. Independent from manager installers and updates." }

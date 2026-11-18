@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/shusfun/mistral-gui/internal/catalog"
 	"io"
 	"io/fs"
@@ -15,14 +16,27 @@ import (
 )
 
 func (a *App) ImportModel(source, trace string) (Operation, error) {
-	info, e := os.Stat(source)
+	// Lstat checks symlinks uniformly for both single GGUF files and safetensors directories (M-S18).
+	info, e := os.Lstat(source)
 	if e != nil {
-		return Operation{}, e
+		if os.IsNotExist(e) {
+			return Operation{}, errors.New("model_not_installed")
+		}
+		return Operation{}, fmt.Errorf("import_failed: %w", e)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return Operation{}, errors.New("model_symlink_unsupported")
 	}
 	if !info.IsDir() && !strings.HasSuffix(strings.ToLower(source), ".gguf") {
 		return Operation{}, errors.New("model_format_unsupported")
 	}
 	return a.operation("import", trace, func(ctx context.Context, id string) error {
+		// Serialize imports through the shared resource queue to avoid concurrent staging races (M-S22).
+		if e := a.acquireResources(ctx); e != nil {
+			return e
+		}
+		defer a.releaseResources()
+
 		format := "gguf"
 		root := filepath.Dir(source)
 		var files []string
@@ -69,6 +83,13 @@ func (a *App) ImportModel(source, trace string) (Operation, error) {
 				return ctx.Err()
 			default:
 			}
+			linfo, le := os.Lstat(p)
+			if le != nil {
+				return le
+			}
+			if linfo.Mode()&os.ModeSymlink != 0 {
+				return errors.New("model_symlink_unsupported")
+			}
 			f, e := os.Open(p)
 			if e != nil {
 				return e
@@ -89,6 +110,9 @@ func (a *App) ImportModel(source, trace string) (Operation, error) {
 		if !hasWeight {
 			return errors.New("model_weights_missing")
 		}
+		if e := checkDiskSpace(a.dataDir, asset.Size); e != nil {
+			return e
+		}
 		b, _ := json.Marshal(manifest)
 		sum := sha256.Sum256(b)
 		asset.Version = hex.EncodeToString(sum[:])
@@ -96,9 +120,16 @@ func (a *App) ImportModel(source, trace string) (Operation, error) {
 		asset.Files = manifest
 		dest := filepath.Join(a.dataDir, "models", asset.ID, asset.Version)
 		stage := dest + ".importing"
+		_ = os.RemoveAll(stage)
 		if e = os.MkdirAll(stage, 0700); e != nil {
 			return e
 		}
+		succeeded := false
+		defer func() {
+			if !succeeded {
+				_ = os.RemoveAll(stage)
+			}
+		}()
 		for i, p := range files {
 			select {
 			case <-ctx.Done():
@@ -133,13 +164,18 @@ func (a *App) ImportModel(source, trace string) (Operation, error) {
 			return e
 		}
 		if _, e = os.Stat(dest); e == nil {
-			if e = verifyModelFiles(dest, manifest); e != nil {
-				return e
+			if verifyModelFiles(dest, manifest) == nil {
+				_ = os.RemoveAll(stage)
+			} else {
+				_ = os.RemoveAll(dest)
+				if e = os.Rename(stage, dest); e != nil {
+					return e
+				}
 			}
-			_ = os.RemoveAll(stage)
 		} else if e = os.Rename(stage, dest); e != nil {
 			return e
 		}
+		succeeded = true
 		if format == "gguf" {
 			dest = filepath.Join(dest, filepath.Base(source))
 		}

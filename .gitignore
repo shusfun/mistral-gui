@@ -1,6 +1,7 @@
 /dist/
 /upstream/
 /runtime-dist/
+/web/node_modules/
 *.log
 *.part
 *.pfx

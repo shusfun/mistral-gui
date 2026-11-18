@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -41,9 +42,17 @@ func main() {
 	if string(b) == "silent-crash" {
 		os.Exit(5)
 	}
+	if string(b) == "slow-load" {
+		time.Sleep(800 * time.Millisecond)
+	}
+	crashOnChat := string(b) == "crash-after-ready"
 	http.HandleFunc("/v1/models", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"data":[{"id":"engine-model"}]}`) })
 	http.HandleFunc("/ui", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "upstream UI fixture") })
 	http.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		if crashOnChat {
+			fmt.Fprintln(os.Stderr, "CUDA runtime OOM during decode: out of device memory")
+			os.Exit(7)
+		}
 		var p struct {
 			Model  string `json:"model"`
 			Stream bool   `json:"stream"`

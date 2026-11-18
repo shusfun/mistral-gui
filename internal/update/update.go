@@ -27,9 +27,12 @@ type Asset struct {
 	Size   int64  `json:"size"`
 }
 type Manifest struct {
-	Version string  `json:"version"`
-	Notes   string  `json:"notes"`
-	Assets  []Asset `json:"assets"`
+	Version     string  `json:"version"`
+	MinVersion  string  `json:"min_version,omitempty"`
+	PublishedAt string  `json:"published_at,omitempty"`
+	ExpiresAt   string  `json:"expires_at,omitempty"`
+	Notes       string  `json:"notes"`
+	Assets      []Asset `json:"assets"`
 }
 
 func IsNewer(current, next string) bool {
@@ -117,12 +120,49 @@ func FetchSigned(ctx context.Context, client *http.Client, raw, key string) (Man
 	if m.Version == "" || strings.ContainsAny(m.Version, "/\\:") {
 		return m, errors.New("version_invalid")
 	}
+	if m.ExpiresAt != "" {
+		exp, e := time.Parse(time.RFC3339, m.ExpiresAt)
+		if e != nil {
+			return m, errors.New("manifest_invalid")
+		}
+		if time.Now().After(exp) {
+			return m, errors.New("manifest_expired")
+		}
+	}
+	if m.MinVersion != "" && IsNewer(m.Version, m.MinVersion) {
+		return m, errors.New("manifest_invalid")
+	}
 	for _, a := range m.Assets {
 		if !strings.HasPrefix(a.URL, "https://github.com/") || len(a.SHA256) != 64 || a.Size <= 0 {
 			return m, errors.New("update_asset_invalid")
 		}
 	}
 	return m, nil
+}
+
+// VerifyFileSignature verifies an Ed25519 base64 signature over the SHA-256 digest of filePath (M-S08).
+func VerifyFileSignature(filePath string, sigBytes []byte, base64PubKey string) error {
+	pub, e := base64.StdEncoding.DecodeString(base64PubKey)
+	if e != nil || len(pub) != ed25519.PublicKeySize {
+		return errors.New("update_key_unconfigured")
+	}
+	sig, e := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sigBytes)))
+	if e != nil || len(sig) != ed25519.SignatureSize {
+		return errors.New("asset_signature_invalid")
+	}
+	f, e := os.Open(filePath)
+	if e != nil {
+		return e
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, e = io.Copy(h, f); e != nil {
+		return e
+	}
+	if !ed25519.Verify(pub, h.Sum(nil), sig) {
+		return errors.New("asset_signature_invalid")
+	}
+	return nil
 }
 func get(ctx context.Context, c *http.Client, raw string, n int64) ([]byte, error) {
 	if c == nil {

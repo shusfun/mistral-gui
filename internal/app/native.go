@@ -8,6 +8,17 @@ import (
 	"strings"
 )
 
+type networkConnContextKey struct{}
+
+func markNetworkConnContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, networkConnContextKey{}, true)
+}
+
+func isNetworkConnRequest(r *http.Request) bool {
+	v, _ := r.Context().Value(networkConnContextKey{}).(bool)
+	return v
+}
+
 type Desktop interface {
 	Ready() bool
 	Show()
@@ -21,6 +32,11 @@ func (a *App) Closed() <-chan struct{} { return a.closed }
 func (a *App) Address() string         { return a.addr }
 func (a *App) DataDir() string         { return a.dataDir }
 func (a *App) Language() string        { a.mu.Lock(); defer a.mu.Unlock(); return a.config.Language }
+func (a *App) ScreenshotHotkey() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.config.ScreenshotHotkey
+}
 func (a *App) DesktopUpdate(trace string) Operation {
 	return a.operation("update", trace, func(ctx context.Context, id string) error { return a.desktop.InstallUpdate(ctx, trace, id) })
 }
@@ -41,11 +57,19 @@ func (a *App) OpenOfficialUI(target string) {
 	if u != nil {
 		id = u.Query().Get("instance")
 	}
-	openURL("http://" + a.addr + "/manage#token=" + a.token() + "&ui=" + url.QueryEscape(id))
+	code := a.issueExchangeCode()
+	_ = openURL("http://" + a.addr + "/manage#exchange=" + code + "&ui=" + url.QueryEscape(id))
 }
+
+// DesktopHandler is strictly for in-process Wails WebView asset routing (never mount on a TCP listener!).
+// Any request arriving over a network socket (marked by Server.ConnContext) is rejected with 403 (M-S25).
 func (a *App) DesktopHandler() http.Handler {
 	handler := a.Handler()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isNetworkConnRequest(r) {
+			fail(w, 403, "desktop_inprocess_only")
+			return
+		}
 		if !strings.HasPrefix(r.URL.Path, "/manage") && !strings.HasPrefix(r.URL.Path, "/api/v1/") && r.URL.Path != "/healthz" && r.URL.Path != "/v1/chat/completions" {
 			http.NotFound(w, r)
 			return
@@ -64,7 +88,7 @@ func (a *App) CompletedOperation(id string) (Operation, bool) {
 	for _, op := range a.operations {
 		if op.ID == id {
 			a.mu.Unlock()
-			return op, op.State == "success" || op.State == "failed"
+			return op, op.State == "success" || op.State == "failed" || op.State == "cancelled"
 		}
 	}
 	a.mu.Unlock()

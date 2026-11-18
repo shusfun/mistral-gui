@@ -57,7 +57,7 @@ API 使用 `Authorization: Bearer TOKEN`。从快捷方式进入管理页时自�
 
 管理器使用 Wails Updater，配合续传 Provider、SHA-256 和固定 Ed25519 公钥验证。Windows 使用 `.wails.update.zip`，macOS 使用 `.update.tar.gz`。Wails 负责替换及重启；独立恢复副本和健康守护处理新实例六十秒内未就绪的回滚。旧 `.update.zip`／`.update.tar.zst` 和签名清单仅供旧协议迁移。macOS 应先复制到可写的 Applications。
 
-v0.2.0 提供新的分区工作台和自绘窗口头部。可通过“更新与设置”检查更新，或下载安装包覆盖升级；配置和模型保留，不随管理器更新重新下载。
+v0.3.0 增加文本与图片翻译工作台、可选轻译词库同步、运行失败冷却及恢复保护。Windows OCR 运行时首次使用时独立下载；Windows 凭据使用 DPAPI，macOS 使用系统钥匙串。单次翻译最多 128 段，超限会明确提示。可通过“更新与设置”检查更新，或下载安装包覆盖升级；配置和模型保留，不随管理器更新重新下载。
 
 `.github/workflows/release.yml` 构建 Windows x64、macOS Intel/Apple Silicon 安装包和机器更新包，生成 `SHA256SUMS`、签名及清单。不会将推理引擎、模型或额外源码压缩包放入管理器资产。GitHub 自动提供的源码下载属于 GitHub 平台功能。
 
@@ -72,6 +72,9 @@ v0.2.0 提供新的分区工作台和自绘窗口头部。可通过“更新与�
 本地构建使用 Go 1.26，工具链固定 Go 1.26.10；macOS 需要 Xcode Command Line Tools 和 CGO：
 
 ```powershell
+npm --prefix web ci
+npm --prefix web run check
+npm --prefix web run build
 go test ./...
 go vet ./...
 go build -trimpath -ldflags="-s -w -H windowsgui" -o dist/mistral-gui.exe ./cmd/mistral-gui

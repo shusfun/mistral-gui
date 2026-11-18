@@ -1,0 +1,232 @@
+/* mistral-gui Workbench Shell & Desktop Frameless Window Styles */
+
+html.desktop body {
+  padding-top: 38px;
+}
+
+/* M-21: Frameless titlebar stays at z-index: 10000 above all modal backdrops (z-index: 9000) */
+.desktop-titlebar {
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 38px;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0 0 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+  --wails-draggable: drag;
+}
+
+html.mac .desktop-titlebar {
+  padding-left: 78px;
+}
+
+.desktop-titlebar-brand {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.desktop-window-controls {
+  display: flex;
+  height: 100%;
+  --wails-draggable: no-drag;
+}
+
+.desktop-window-controls button {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  width: 44px;
+  height: 100%;
+  padding: 0;
+  font-size: 13px;
+  color: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.desktop-window-controls button:hover:not(:disabled) {
+  background: var(--surface-muted);
+}
+
+.desktop-window-controls button.close-btn:hover:not(:disabled) {
+  background: #c42b1c;
+  color: #fff;
+}
+
+/* Override modal backdrop top offset when desktop titlebar is visible */
+html.desktop .modal-backdrop {
+  top: 38px;
+}
+
+.mg-shell {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 24px 20px 44px;
+  display: grid;
+  grid-template-columns: 228px minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+
+.mg-sidebar {
+  position: sticky;
+  top: 24px;
+  display: grid;
+  gap: 12px;
+}
+
+html.desktop .mg-sidebar {
+  top: 56px;
+}
+
+.mg-brand-card {
+  padding: 14px 16px;
+}
+
+.mg-brand-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mg-nav {
+  display: grid;
+  gap: 4px;
+}
+
+.mg-nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.mg-nav-btn:hover:not(:disabled) {
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.mg-nav-btn[aria-current="page"] {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  color: var(--ink);
+  font-weight: 650;
+  box-shadow: var(--shadow-sm);
+}
+
+.mg-main {
+  min-width: 0;
+  display: grid;
+  gap: 16px;
+}
+
+.mg-section {
+  padding: 22px;
+}
+
+/* M-42: Search bar spans full remaining width cleanly */
+.mg-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  margin: 14px 0;
+}
+
+.mg-filter-bar .field {
+  margin: 0;
+}
+
+/* Indeterminate progress bar for unknown-length background checks (M-28) */
+.mg-progress-track {
+  width: 100%;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.mg-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+
+.mg-progress-fill.indeterminate {
+  width: 36%;
+  animation: mg-slide 1.25s ease-in-out infinite;
+}
+
+@keyframes mg-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(280%);
+  }
+}
+
+/* Interactive Screenshot Region Cropper */
+.mg-crop-stage {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  overflow: hidden;
+  cursor: crosshair;
+  user-select: none;
+  touch-action: none;
+}
+
+.mg-crop-stage img {
+  display: block;
+  max-width: 100%;
+  max-height: 440px;
+  height: auto;
+  pointer-events: none;
+}
+
+.mg-crop-rect {
+  position: absolute;
+  border: 2px solid var(--accent);
+  background: rgba(20, 108, 67, 0.14);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.36);
+  pointer-events: none;
+}
+
+@media (max-width: 860px) {
+  .mg-shell {
+    grid-template-columns: 1fr;
+  }
+  .mg-sidebar {
+    position: static;
+  }
+  .mg-nav {
+    display: flex;
+    flex-wrap: wrap;
+  }
+  .mg-nav-btn {
+    width: auto;
+  }
+  .mg-filter-bar {
+    grid-template-columns: 1fr;
+  }
+}

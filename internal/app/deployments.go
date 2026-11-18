@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/shusfun/mistral-gui/internal/catalog"
 	"io"
 	"net/http"
 	"regexp"
@@ -58,7 +59,7 @@ func (a *App) newDeployment(d Deployment) *App {
 	c.AutoStart = d.AutoStart
 	c.IdleMinutes = d.IdleMinutes
 	c.Tuning = d.Tuning
-	return &App{parent: a, deploymentID: d.ID, addr: a.addr, dataDir: a.dataDir, config: c, installed: append([]Installed(nil), a.installed...), state: State{State: "stopped", UpdatedAt: time.Now().UTC()}, closed: a.closed, client: a.client, catalog: a.catalog, cancels: map[string]context.CancelFunc{}}
+	return &App{parent: a, deploymentID: d.ID, addr: a.addr, dataDir: a.dataDir, config: c, installed: append([]Installed(nil), a.installed...), state: State{State: "stopped", UpdatedAt: time.Now().UTC()}, runtimeLog: newRingLogBuffer(defaultRingLogCapacity), closed: a.closed, client: a.client, catalog: a.catalog, cancels: map[string]context.CancelFunc{}}
 }
 func (a *App) children() []*App {
 	a.mu.Lock()
@@ -105,12 +106,19 @@ func (a *App) deploymentViews() []DeploymentView {
 		child.mu.Unlock()
 		revision, path, name := "", "", d.Model
 		if ok {
+			if d.Version == "" {
+				d.Version = in.Version
+			}
 			revision = in.Version + ":" + in.SHA256
 			path = in.Path
 			name = in.Name
 			if in.Repository != "" {
 				name = in.Repository
 			}
+		}
+		if s.CooldownUntil != nil && !time.Now().UTC().Before(*s.CooldownUntil) && s.State == "cooldown" {
+			s.State = "failed"
+			s.CooldownUntil = nil
 		}
 		b, _ := json.Marshal([]any{revision, d.Backend, d.Tuning})
 		sum := sha256.Sum256(b)
@@ -164,6 +172,10 @@ func (a *App) putDeployment(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, e.Error())
 		return
 	}
+	if d.Repository != "" && !catalog.ValidRepository(d.Repository) {
+		fail(w, 400, "invalid_repository")
+		return
+	}
 	a.lifecycle.Lock()
 	defer a.lifecycle.Unlock()
 	a.mu.Lock()
@@ -179,18 +191,20 @@ func (a *App) putDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Version = in.Version
-	if child := a.deployments[d.ID]; child != nil {
-		child.lifecycle.Lock()
-		defer child.lifecycle.Unlock()
-		child.mu.Lock()
-		running := child.engine != nil
-		child.mu.Unlock()
+	oldChild := a.deployments[d.ID]
+	if oldChild != nil {
+		oldChild.lifecycle.Lock()
+		defer oldChild.lifecycle.Unlock()
+		oldChild.mu.Lock()
+		running := oldChild.engine != nil
+		oldChild.mu.Unlock()
 		if running {
 			a.mu.Unlock()
 			fail(w, 409, "stop_before_switch")
 			return
 		}
 	}
+	prevSlice := append([]Deployment(nil), a.config.Deployments...)
 	found := false
 	for i, old := range a.config.Deployments {
 		if old.ID == d.ID {
@@ -205,9 +219,22 @@ func (a *App) putDeployment(w http.ResponseWriter, r *http.Request) {
 	if !found {
 		a.config.Deployments = append(a.config.Deployments, d)
 	}
-	a.deployments[d.ID] = a.newDeployment(d)
+	nextChild := a.newDeployment(d)
+	if oldChild != nil && oldChild.runtimeLog != nil {
+		nextChild.runtimeLog = oldChild.runtimeLog
+	}
+	a.deployments[d.ID] = nextChild
 	a.mu.Unlock()
 	if a.save() != nil {
+		// Roll back in-memory mutation when persistence fails (M-S23).
+		a.mu.Lock()
+		a.config.Deployments = prevSlice
+		if oldChild != nil {
+			a.deployments[d.ID] = oldChild
+		} else {
+			delete(a.deployments, d.ID)
+		}
+		a.mu.Unlock()
 		fail(w, 500, "settings_write_failed")
 		return
 	}
@@ -322,6 +349,7 @@ func (a *App) runtimeAction(kind string) http.HandlerFunc {
 				child.stopEngine()
 			}
 			if kind != "stop" {
+				child.resetCooldown()
 				return child.ensureEngine(ctx, trace)
 			}
 			return nil

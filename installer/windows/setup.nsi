@@ -9,6 +9,7 @@ InstallDirRegKey HKCU "Software\mistral-gui" "InstallDir"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 !include "MUI2.nsh"
+!include "FileFunc.nsh"
 !define MUI_LANGDLL_REGISTRY_ROOT HKCU
 !define MUI_LANGDLL_REGISTRY_KEY "Software\mistral-gui"
 !define MUI_LANGDLL_REGISTRY_VALUENAME "InstallerLanguage"
@@ -25,6 +26,10 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_LANGUAGE "SimpChinese"
 !insertmacro MUI_LANGUAGE "English"
 !insertmacro MUI_RESERVEFILE_LANGDLL
+
+LangString ConfirmRemoveData ${LANG_SIMPCHINESE} "是否同时删除本地模型、配置与凭据数据目录（$APPDATA\mistral-gui，约 $0 MB）？$\r$\n选择“否”将保留已下载的模型。"
+LangString ConfirmRemoveData ${LANG_ENGLISH} "Also delete local models, settings, and credentials in $APPDATA\mistral-gui (~$0 MB)?$\r$\nChoose 'No' to keep downloaded models."
+
 Function .onInit
   !insertmacro MUI_LANGDLL_DISPLAY
 FunctionEnd
@@ -36,8 +41,9 @@ Function Launch
 FunctionEnd
 Section "mistral-gui"
   SetShellVarContext current
-  IfFileExists "$INSTDIR\mistral-gui.exe" 0 +3
-  ExecWait '"$INSTDIR\mistral-gui.exe" --quit'
+  IfFileExists "$INSTDIR\mistral-gui.exe" 0 +4
+  ExecWait '"$INSTDIR\mistral-gui.exe" --data-dir "$APPDATA\mistral-gui" --quit'
+  nsExec::ExecToStack 'taskkill /F /IM mistral-gui.exe'
   Sleep 1000
   SetOutPath "$INSTDIR"
   File "..\..\dist\mistral-gui.exe"
@@ -57,16 +63,31 @@ Function un.onInit
   !insertmacro MUI_UNGETLANGUAGE
 FunctionEnd
 Section "Uninstall"
-  ExecWait '"$INSTDIR\mistral-gui.exe" --quit'
+  SetShellVarContext current
+  ; Stop running instance across default or custom port recorded in instance.json, plus fallback taskkill (M-S28)
+  IfFileExists "$INSTDIR\mistral-gui.exe" 0 +2
+  ExecWait '"$INSTDIR\mistral-gui.exe" --data-dir "$APPDATA\mistral-gui" --quit'
+  nsExec::ExecToStack 'taskkill /F /IM mistral-gui.exe'
   Sleep 1000
   Delete "$INSTDIR\mistral-gui.exe"
   Delete "$INSTDIR\mistral-gui.exe.previous"
+  Delete "$INSTDIR\mistral-gui.exe.next"
+  Delete "$INSTDIR\mistral-gui.exe.failed-*"
+  RMDir /r "$INSTDIR\.mistral-gui-unpack"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
   Delete "$DESKTOP\mistral-gui.lnk"
   Delete "$SMPROGRAMS\mistral-gui\mistral-gui.lnk"
   Delete "$SMPROGRAMS\mistral-gui\Uninstall.lnk"
   RMDir "$SMPROGRAMS\mistral-gui"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "mistral-gui"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\mistral-gui"
   DeleteRegKey HKCU "Software\mistral-gui"
+
+  ; Prompt interactive user to optionally remove $APPDATA\mistral-gui with disk usage; silent uninstall (/S) defaults to IDNO (M-S20)
+  IfFileExists "$APPDATA\mistral-gui\*.*" 0 doneData
+  ${GetSize} "$APPDATA\mistral-gui" "/S=0M" $0 $1 $2
+  MessageBox MB_YESNO|MB_ICONQUESTION "$(ConfirmRemoveData)" /SD IDNO IDNO doneData
+  RMDir /r "$APPDATA\mistral-gui"
+  doneData:
 SectionEnd

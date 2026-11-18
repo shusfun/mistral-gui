@@ -38,11 +38,17 @@ func Extract(src, dest string, limit int64) error {
 		if err != nil {
 			return err
 		}
-		n, err := io.CopyN(f, r, size)
+		n, err := io.Copy(f, io.LimitReader(r, size+1))
 		cerr := f.Close()
 		used += n
 		if err != nil {
 			return err
+		}
+		if n > size {
+			return errors.New("archive_size_limit")
+		}
+		if n < size {
+			return io.ErrUnexpectedEOF
 		}
 		return cerr
 	}

@@ -6,6 +6,8 @@ import (
 	archiveutil "github.com/shusfun/mistral-gui/internal/archive"
 	"github.com/shusfun/mistral-gui/internal/catalog"
 	"github.com/shusfun/mistral-gui/internal/download"
+	"github.com/shusfun/mistral-gui/internal/update"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -28,6 +30,9 @@ func (a *App) installResource(ctx context.Context, id string, asset catalog.Asse
 	}
 	if strings.ContainsAny(asset.ID, `/\:`) || strings.ContainsAny(asset.Version, `/\:`) {
 		return errors.New("invalid_asset")
+	}
+	if err := checkDiskSpace(a.dataDir, asset.Size*2); err != nil {
+		return err
 	}
 	a.mu.Lock()
 	mirrors := append([]string(nil), a.config.Mirrors...)
@@ -58,6 +63,25 @@ func (a *App) installResource(ctx context.Context, id string, asset catalog.Asse
 	if err != nil {
 		return err
 	}
+	if asset.Kind == "engine" && asset.SignatureURL != "" && UpdatePublicKey != "" {
+		sigReq, e := http.NewRequestWithContext(ctx, "GET", asset.SignatureURL, nil)
+		if e != nil {
+			return e
+		}
+		resp, e := a.client.Do(sigReq)
+		if e != nil {
+			return e
+		}
+		sigBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		_ = resp.Body.Close()
+		if resp.StatusCode != 200 || readErr != nil {
+			return errors.New("asset_signature_invalid")
+		}
+		if e = update.VerifyFileSignature(dest, sigBytes, UpdatePublicKey); e != nil {
+			_ = os.Remove(dest)
+			return e
+		}
+	}
 	path := dest
 	if asset.Kind == "engine" {
 		dir := filepath.Join(a.dataDir, "engines", asset.Version, asset.Backend)
@@ -84,11 +108,22 @@ func (a *App) installResource(ctx context.Context, id string, asset catalog.Asse
 			return nil
 		})
 		if err != nil || path == dest {
+			_ = os.RemoveAll(staging)
 			return errors.New("engine_binary_missing")
 		}
+		// Replace missing or corrupt existing engine binary cleanly with freshly verified staging (M-S03).
 		if _, err = os.Stat(dir); err == nil {
-			_ = os.RemoveAll(staging)
+			if _, binErr := os.Stat(path); binErr == nil {
+				_ = os.RemoveAll(staging)
+			} else {
+				_ = os.RemoveAll(dir)
+				if err = os.Rename(staging, dir); err != nil {
+					_ = os.RemoveAll(staging)
+					return err
+				}
+			}
 		} else if err = os.Rename(staging, dir); err != nil {
+			_ = os.RemoveAll(staging)
 			return err
 		}
 	} else {
@@ -97,6 +132,7 @@ func (a *App) installResource(ctx context.Context, id string, asset catalog.Asse
 			return err
 		}
 		path = filepath.Join(dir, asset.ID)
+		_ = os.Remove(path)
 		if err = os.Rename(dest, path); err != nil {
 			return err
 		}
@@ -179,6 +215,9 @@ func (a *App) exportDiagnostics() any {
 		b := make([]byte, 64<<10)
 		n, _ := f.Read(b)
 		logs = strings.ReplaceAll(string(b[:n]), a.config.Token, "[redacted]")
+		if a.config.CloudAPIKey != "" {
+			logs = strings.ReplaceAll(logs, a.config.CloudAPIKey, "[redacted]")
+		}
 	}
 	return map[string]any{"version": Version, "platform": runtime.GOOS + "/" + runtime.GOARCH, "status": a.state, "operations": a.operations, "logs": logs}
 }
