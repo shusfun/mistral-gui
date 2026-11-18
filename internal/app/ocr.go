@@ -25,8 +25,8 @@ import (
 
 const (
 	ocrReleaseTag            = "ocr-v1.4.4"
-	ocrEstimatedArchiveBytes = 75 * 1024 * 1024  // ~75 MiB compressed bundle
-	ocrRequiredDiskBytes     = 260 * 1024 * 1024 // Unpacked runtime + extraction headroom
+	ocrEstimatedArchiveBytes = 138 * 1024 * 1024 // Rounded up from the 137.1 MiB release archive
+	ocrRequiredDiskBytes     = 640 * 1024 * 1024 // Archive + 358.2 MiB unpacked runtime + headroom
 	ocrIdleTimeout           = 10 * time.Minute
 )
 
