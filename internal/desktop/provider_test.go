@@ -1,8 +1,10 @@
 package desktop
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -14,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -47,15 +50,41 @@ func (updateTestHost) Quit() {}
 func TestResumableProviderWithWailsSignatureVerification(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	var archive bytes.Buffer
-	z := zip.NewWriter(&archive)
-	f, _ := z.Create("mistral-gui.exe")
-	_, _ = f.Write([]byte("new executable"))
-	_ = z.Close()
+	payload := []byte("new executable")
+	name := updateName(runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		writer := zip.NewWriter(&archive)
+		entry, err := writer.Create("mistral-gui.exe")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entry.Write(payload); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		compressed := gzip.NewWriter(&archive)
+		writer := tar.NewWriter(compressed)
+		if err := writer.WriteHeader(&tar.Header{Name: "mistral-gui.app/Contents/MacOS/mistral-gui", Size: int64(len(payload)), Mode: 0755}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write(payload); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := compressed.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	digest := sha256.Sum256(archive.Bytes())
 	for _, mode := range []string{"valid", "wrong-key", "missing-signature", "corrupt", "cancel", "old-manifest"} {
 		t.Run(mode, func(t *testing.T) {
-			assetURL := "https://github.com/owner/manager/releases/download/v0.2.0/" + updateName("windows", "amd64")
-			m := update.Manifest{Version: "v0.2.0", Assets: []update.Asset{{OS: "windows", Arch: "amd64", Kind: "wails-update", URL: assetURL, SHA256: hex.EncodeToString(digest[:]), Size: int64(archive.Len())}}}
+			assetURL := "https://github.com/owner/manager/releases/download/v0.2.0/" + name
+			m := update.Manifest{Version: "v0.2.0", Assets: []update.Asset{{OS: runtime.GOOS, Arch: runtime.GOARCH, Kind: "wails-update", URL: assetURL, SHA256: hex.EncodeToString(digest[:]), Size: int64(archive.Len())}}}
 			if mode == "old-manifest" {
 				m.Assets[0].Kind = "update"
 			}
@@ -66,7 +95,7 @@ func TestResumableProviderWithWailsSignatureVerification(t *testing.T) {
 					w.Write(manifest)
 				case r.URL.Path == "/manifest.sig":
 					fmt.Fprint(w, base64.StdEncoding.EncodeToString(ed25519.Sign(priv, manifest)))
-				case strings.HasSuffix(r.URL.Path, ".zip.sig"):
+				case strings.HasSuffix(r.URL.Path, "/"+name+".sig"):
 					if mode == "missing-signature" {
 						w.WriteHeader(404)
 						return
@@ -76,7 +105,7 @@ func TestResumableProviderWithWailsSignatureVerification(t *testing.T) {
 						_, key, _ = ed25519.GenerateKey(rand.Reader)
 					}
 					fmt.Fprint(w, base64.StdEncoding.EncodeToString(ed25519.Sign(key, digest[:])))
-				case strings.HasSuffix(r.URL.Path, ".zip"):
+				case strings.HasSuffix(r.URL.Path, "/"+name):
 					if mode == "corrupt" {
 						_, _ = w.Write(bytes.Repeat([]byte("x"), archive.Len()))
 						return
