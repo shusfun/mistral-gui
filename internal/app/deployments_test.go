@@ -20,6 +20,11 @@ func TestIndependentDeploymentsCoalesceRouteAndPersist(t *testing.T) {
 		}
 	}
 	var wg sync.WaitGroup
+	for _, view := range a.deploymentViews() {
+		if view.Default != (view.ID == "fixture.gguf") {
+			t.Fatalf("unexpected default marker for %s: %t", view.ID, view.Default)
+		}
+	}
 	for _, id := range []string{"translation", "chat"} {
 		for range 8 {
 			wg.Add(1)

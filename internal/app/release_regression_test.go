@@ -33,9 +33,17 @@ func TestReleaseTranslationLimitsAndSyncSnapshot(t *testing.T) {
 			t.Fatalf("unauthorized %s: %d", path, w.Code)
 		}
 	}
-	w := call("/api/v1/translate", map[string]any{"text": strings.Repeat("paragraph\n", 129)}, true)
+	w := call("/api/v1/translate", map[string]any{"text": strings.Repeat("Paragraph.\n\n", 129)}, true)
 	if w.Code != 400 || !strings.Contains(w.Body.String(), "translation_input_limit") {
-		t.Fatalf("silently truncated: %d %s", w.Code, w.Body.String())
+		t.Fatalf("silently truncated (>128 paragraphs): %d %s", w.Code, w.Body.String())
+	}
+	w = call("/api/v1/translate", map[string]any{"text": strings.Repeat("paragraph\n", 129), "preserve_lines": true}, true)
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "translation_input_limit") {
+		t.Fatalf("silently truncated (>128 preserve_lines): %d %s", w.Code, w.Body.String())
+	}
+	w = call("/api/v1/translate", map[string]any{"text": strings.Repeat("paragraph\n", 900)}, true)
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "translation_input_limit") {
+		t.Fatalf("silently accepted oversized merged paragraph: %d %s", w.Code, w.Body.String())
 	}
 	rev := SyncedRevision{Source: "release smoke", Translation: "发布冒烟", SourceLang: "auto", TargetLang: "zh-CN", Time: 1}
 	w = call("/api/v1/dictionary/sync", map[string]any{"revisions": []SyncedRevision{rev}, "revisionsSnapshot": true}, true)

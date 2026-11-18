@@ -4,10 +4,15 @@ import {
   Button,
   DataList,
   FeedbackBanner,
+  IconDownload,
+  IconRefresh,
+  IconTrash,
+  IconUpload,
   Select,
+  SettingGroup,
+  SettingRow,
   StateBlock,
   TextInput,
-  VerdictHero,
   confirmAction,
   feedbackStore,
   formatBytes,
@@ -66,8 +71,12 @@ export function ModelsPage({
 
   const activeRepo = customRepo.trim() || selectedRepo;
 
-  // M-01 & M-25: Pass selectedBackend directly in query so user doesn't have to click Save Backend first; surface structured error + Retry on failure!
-  const fetchAssets = async (refresh = false, backendArg = selectedBackend, repoArg = activeRepo) => {
+  // M-01 & M-25: Pass selectedBackend directly in query; surface structured error + Retry on failure
+  const fetchAssets = async (
+    refresh = false,
+    backendArg = selectedBackend,
+    repoArg = activeRepo,
+  ) => {
     setLoadingAssets(true);
     try {
       const params = new URLSearchParams();
@@ -86,7 +95,9 @@ export function ModelsPage({
       setAssetErrors(res.errors || {});
       if (refresh) {
         toast(
-          en ? "Refreshed upstream asset list." : "已刷新上游可用运行时与模型列表。",
+          en
+            ? "Refreshed upstream asset list."
+            : "已刷新上游可用运行时与模型列表。",
           "success",
         );
       }
@@ -120,9 +131,9 @@ export function ModelsPage({
     })();
   }, []);
 
-  // Compute hardware fit badge ("suitable" | "tight" | "unsuitable") from device available memory / GPU VRAM (Prompt Item 13)
   const evaluateFit = (asset: CatalogAsset) => {
-    let budgetBytes = deviceInfo?.available_bytes || deviceInfo?.memory_bytes || 0;
+    let budgetBytes =
+      deviceInfo?.available_bytes || deviceInfo?.memory_bytes || 0;
     if (deviceInfo?.gpu_details && deviceInfo.gpu_details.length > 0) {
       let maxVram = 0;
       for (const g of deviceInfo.gpu_details) {
@@ -135,15 +146,26 @@ export function ModelsPage({
       asset.format === "safetensors" ? asset.size / 3 : asset.size;
     const estimated = baseWeight * 1.25 + 512 * 1024 * 1024;
     if (estimated <= budgetBytes * 0.78) {
-      return { tone: "success" as const, label: t(locale, "suitable"), estimated };
+      return {
+        tone: "success" as const,
+        label: t(locale, "suitable"),
+        estimated,
+      };
     }
     if (estimated <= budgetBytes * 1.05) {
-      return { tone: "warning" as const, label: t(locale, "tight"), estimated };
+      return {
+        tone: "warning" as const,
+        label: t(locale, "tight"),
+        estimated,
+      };
     }
-    return { tone: "error" as const, label: t(locale, "unsuitable"), estimated };
+    return {
+      tone: "error" as const,
+      label: t(locale, "unsuitable"),
+      estimated,
+    };
   };
 
-  // M-01 & M-45: Install engine sends selectedBackend directly and provides immediate banner + toast feedback!
   const handleInstallEngine = () =>
     runTracked(
       { key: "models:install-engine", scope: "models", lang: uiLang },
@@ -157,7 +179,7 @@ export function ModelsPage({
         feedbackStore.setBanner("models", {
           tone: "info",
           message: en
-            ? `Downloading ${selectedBackend.toUpperCase()} runtime in background (track progress in Activity)…`
+            ? `Downloading ${selectedBackend.toUpperCase()} runtime in background…`
             : `已开始下载 ${selectedBackend.toUpperCase()} 推理运行时（可在「任务记录」查看实时进度）…`,
         });
       },
@@ -192,12 +214,11 @@ export function ModelsPage({
           tone: "info",
           message: en
             ? `Queued download for ${m.id} (resumable, verified by SHA-256).`
-            : `已加入下载任务：${m.id}（支持断点续传与 SHA-256 完整性校验）。`,
+            : `已加入下载任务：${m.id}（支持断点续传与 SHA-256 校验）。`,
         });
       },
     );
 
-  // M-24: Hardware recommendation works on uninstalled catalog models via size & format query params!
   const handlePreviewRecommend = (m: CatalogAsset) =>
     runTracked(
       { key: `models:rec:${m.id}`, scope: "models", lang: uiLang },
@@ -272,28 +293,50 @@ export function ModelsPage({
 
   return (
     <section class="panel mg-section">
-      <VerdictHero
-        eyebrow={en ? "RUNTIME ENGINE & MODEL WEIGHTS" : "推理运行时与模型仓库"}
-        title={
-          en
-            ? `${installedModels.length} installed model(s) · Engine ${data.settings.engine ? data.settings.engine_version || "Ready" : "Not installed"}`
-            : `已安装 ${installedModels.length} 个本地模型 · 推理引擎 ${data.settings.engine ? data.settings.engine_version || "已就绪" : "尚未安装"}`
-        }
-        description={
-          en
-            ? "Runtime binaries and GGUF/safetensors weights are stored separately with SHA-256 verification and resumable downloads."
-            : "推理引擎与 GGUF / safetensors 权重分开存放，全部下载均校验 SHA-256 摘要并支持断点续传。"
-        }
-      />
+      <div class="mg-page-head">
+        <div class="mg-page-title-group">
+          <h1 class="mg-page-title">{t(locale, "navModels")}</h1>
+          <Badge tone={data.settings.engine ? "success" : "neutral"}>
+            {data.settings.engine
+              ? `${en ? "Engine" : "引擎"}: ${data.settings.engine_version || (en ? "Ready" : "已安装")}`
+              : en
+                ? "Engine Not Installed"
+                : "引擎未安装"}
+          </Badge>
+          <Badge tone="neutral">
+            {en
+              ? `${installedModels.length} Installed`
+              : `已装 ${installedModels.length} 个模型`}
+          </Badge>
+        </div>
+
+        <Button
+          size="sm"
+          icon={<IconRefresh size={13} />}
+          busy={loadingAssets}
+          onClick={() => void fetchAssets(true, selectedBackend, activeRepo)}
+        >
+          {en ? "Check Releases" : "刷新上游列表"}
+        </Button>
+      </div>
 
       <FeedbackBanner scope="models" lang={uiLang} />
 
-      {/* Section 1: mistral.rs Runtime Engine */}
-      <fieldset>
-        <legend>{en ? "1. mistral.rs Inference Engine" : "1. mistral.rs 推理运行时"}</legend>
-        <div class="grid-2">
+      <SettingGroup
+        title={en ? "mistral.rs Inference Runtime" : "mistral.rs 推理运行时"}
+        description={
+          engineAsset
+            ? en
+              ? `Matched package: ${engineAsset.id} (${engineAsset.version}, ${formatBytes(engineAsset.size, uiLang)}, ${formatAssetSource(locale, engineAsset.source)})`
+              : `匹配发行包：${engineAsset.id}（${engineAsset.version} · ${formatBytes(engineAsset.size, uiLang)} · ${formatAssetSource(locale, engineAsset.source)}）`
+            : undefined
+        }
+      >
+        <SettingRow
+          title={en ? "Target Acceleration Backend" : "硬件加速后端"}
+          controlWidth="medium"
+        >
           <Select
-            label={en ? "Target Acceleration Backend" : "选择硬件加速后端"}
             value={selectedBackend}
             options={[
               { value: "auto", label: formatBackend(locale, "auto") },
@@ -306,34 +349,44 @@ export function ModelsPage({
               void fetchAssets(false, v, activeRepo);
             }}
           />
-          <div style={{ display: "flex", alignItems: "end", gap: "8px", flexWrap: "wrap" }}>
+        </SettingRow>
+
+        <SettingRow
+          title={en ? "Runtime Package Actions" : "运行时安装与切换"}
+          description={
+            assetErrors.engine
+              ? resolveError(assetErrors.engine, uiLang).message
+              : en
+                ? "Verified by SHA-256 digest with instant previous-version rollback"
+                : "自动校验 SHA-256 摘要，支持一键切回上一版本"
+          }
+        >
+          <div class="actions" style={{ margin: 0 }}>
             <Button
-              busy={loadingAssets}
-              onClick={() => void fetchAssets(true, selectedBackend, activeRepo)}
-            >
-              {en ? "Check upstream releases" : "检查可用资产"}
-            </Button>
-            <Button
+              size="sm"
               variant="primary"
+              icon={<IconDownload size={13} />}
               busy={store.isBusy("models:install-engine")}
               onClick={handleInstallEngine}
             >
               {data.settings.engine
                 ? en
-                  ? "Update / Reinstall Runtime"
-                  : "更新或重装此后端运行时"
+                  ? "Update / Reinstall"
+                  : "更新或重装运行时"
                 : en
                   ? "Download Runtime"
                   : "下载并安装运行时"}
             </Button>
             <Button
+              size="sm"
               busy={store.isBusy("models:save-backend")}
               onClick={handleSaveBackend}
             >
-              {en ? "Save as default backend" : "设为默认后端"}
+              {en ? "Set Default Backend" : "设为默认后端"}
             </Button>
             {data.settings.previous_engine ? (
               <Button
+                size="sm"
                 onClick={() =>
                   void runTracked(
                     { key: "models:rb-engine", scope: "models", lang: uiLang },
@@ -348,52 +401,46 @@ export function ModelsPage({
                   )
                 }
               >
-                {en ? "Roll back runtime" : "切回上一版运行时"}
+                {en ? "Roll Back" : "切回上一版"}
               </Button>
             ) : null}
           </div>
-        </div>
+        </SettingRow>
+      </SettingGroup>
 
-        {assetErrors.engine ? (
-          <div class="feedback-banner" data-tone="error" style={{ marginTop: "12px" }}>
-            <span>{resolveError(assetErrors.engine, uiLang).message}</span>
-          </div>
-        ) : engineAsset ? (
-          <p class="hint" style={{ marginTop: "10px" }}>
-            {en
-              ? `Available: ${engineAsset.id} (${engineAsset.version}, ${formatBytes(engineAsset.size, uiLang)}, ${formatAssetSource(locale, engineAsset.source)})`
-              : `匹配发行包：${engineAsset.id}（版本 ${engineAsset.version} · ${formatBytes(engineAsset.size, uiLang)} · 来源：${formatAssetSource(locale, engineAsset.source)}）`}
-          </p>
-        ) : null}
-      </fieldset>
-
-      {/* Section 2: Installed Models */}
-      <fieldset>
-        <legend>{en ? "2. Installed Local Models" : "2. 本机已安装模型"}</legend>
-        {isDesktopMode ? (
-          <div class="actions" style={{ marginTop: 0, marginBottom: "12px" }}>
-            <Button
-              busy={store.isBusy("models:import-gguf")}
-              onClick={() => void handleImportLocal("import-gguf")}
-            >
-              {en ? "Import local .gguf file…" : "导入本地 .gguf 文件…"}
-            </Button>
-            <Button
-              busy={store.isBusy("models:import-directory")}
-              onClick={() => void handleImportLocal("import-directory")}
-            >
-              {en ? "Import safetensors folder…" : "导入本地 safetensors 目录…"}
-            </Button>
-          </div>
-        ) : null}
-
+      <SettingGroup
+        title={en ? "Installed Local Models" : "已安装本地模型"}
+        padded
+        actions={
+          isDesktopMode ? (
+            <>
+              <Button
+                size="sm"
+                icon={<IconUpload size={13} />}
+                busy={store.isBusy("models:import-gguf")}
+                onClick={() => void handleImportLocal("import-gguf")}
+              >
+                {en ? "Import .gguf" : "导入 .gguf 文件"}
+              </Button>
+              <Button
+                size="sm"
+                icon={<IconUpload size={13} />}
+                busy={store.isBusy("models:import-directory")}
+                onClick={() => void handleImportLocal("import-directory")}
+              >
+                {en ? "Import Folder" : "导入 safetensors 目录"}
+              </Button>
+            </>
+          ) : undefined
+        }
+      >
         <DataList
           items={installedModels}
           getKey={(m) => `${m.id}@${m.version}`}
           emptyMessage={
             en
               ? "No models installed yet. Choose a recommended model below to download."
-              : "尚未安装本地模型，可在下方「可下载模型目录」一键下载。"
+              : "尚未安装本地模型，可在下方模型目录一键下载。"
           }
           lang={uiLang}
           renderItem={(m) => {
@@ -405,10 +452,19 @@ export function ModelsPage({
             return (
               <>
                 <div class="list-row-main">
-                  <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "8px",
+                      alignItems: "center",
+                      flexWrap: "wrap",
+                    }}
+                  >
                     <strong>{m.id}</strong>
                     {isDefaultSelected ? (
-                      <Badge tone="success">{en ? "Current Default" : "当前默认"}</Badge>
+                      <Badge tone="success">
+                        {en ? "Default" : "当前默认"}
+                      </Badge>
                     ) : null}
                     {fit ? <Badge tone={fit.tone}>{fit.label}</Badge> : null}
                   </div>
@@ -423,18 +479,21 @@ export function ModelsPage({
                       .join(" · ")}
                   </p>
                 </div>
-                <div class="actions">
+                <div class="actions" style={{ margin: 0 }}>
                   {!isDefaultSelected ? (
                     <Button
+                      size="sm"
                       variant="primary"
                       busy={store.isBusy(`models:use:${m.id}:${m.version}`)}
                       onClick={() => void handleSelectDefaultModel(m)}
                     >
-                      {en ? "Use as default" : "设为默认"}
+                      {en ? "Set Default" : "设为默认"}
                     </Button>
                   ) : null}
                   <Button
+                    size="sm"
                     variant="danger"
+                    icon={<IconTrash size={12} />}
                     busy={store.isBusy(`models:del:${m.id}:${m.version}`)}
                     onClick={() => void handleDeleteModel(m)}
                   >
@@ -445,16 +504,13 @@ export function ModelsPage({
             );
           }}
         />
-      </fieldset>
+      </SettingGroup>
 
-      {/* Section 3: Curated & Custom Hugging Face Catalog */}
-      <fieldset>
-        <legend>
-          {en
-            ? "3. Curated Translation & Multilingual Model Catalog"
-            : "3. 精选翻译与多语模型目录（支持自定义 Hugging Face 仓库）"}
-        </legend>
-        <div class="grid-2" style={{ marginBottom: "12px" }}>
+      <SettingGroup
+        title={en ? "Model Catalog" : "可下载模型目录（支持自定义 Hugging Face 仓库）"}
+        padded
+      >
+        <div class="grid-2" style={{ marginBottom: "14px" }}>
           <Select
             label={en ? "Featured Repository" : "精选模型仓库"}
             value={selectedRepo}
@@ -471,7 +527,11 @@ export function ModelsPage({
           <div style={{ display: "flex", gap: "8px", alignItems: "end" }}>
             <div style={{ flex: 1 }}>
               <TextInput
-                label={en ? "Or custom Hugging Face repo (owner/repo)" : "或输入自定义仓库（owner/repo）"}
+                label={
+                  en
+                    ? "Custom Hugging Face Repo (owner/repo)"
+                    : "自定义仓库（owner/repo）"
+                }
                 placeholder="Qwen/Qwen3-4B-GGUF"
                 value={customRepo}
                 onValueInput={(v) => setCustomRepo(v)}
@@ -481,12 +541,11 @@ export function ModelsPage({
               busy={loadingAssets}
               onClick={() => void fetchAssets(true, selectedBackend, activeRepo)}
             >
-              {en ? "Load" : "读取列表"}
+              {en ? "Load" : "读取"}
             </Button>
           </div>
         </div>
 
-        {/* M-25: Explicit failure state with Retry when upstream catalog fetch fails */}
         {assetErrors.models ? (
           <StateBlock
             kind="failed"
@@ -502,7 +561,7 @@ export function ModelsPage({
             message={
               en
                 ? "Fetching repository files & SHA-256 digests…"
-                : "正在读取模型仓库文件大小与校验摘要…"
+                : "正在读取仓库文件体积与校验摘要…"
             }
             lang={uiLang}
           />
@@ -513,7 +572,7 @@ export function ModelsPage({
             emptyMessage={
               en
                 ? "No compatible GGUF/safetensors weights found in this repository."
-                : "该仓库中未找到受支持的量化或权重文件。"
+                : "该仓库中未找到兼容的量化或权重文件。"
             }
             lang={uiLang}
             renderItem={(m) => {
@@ -527,14 +586,27 @@ export function ModelsPage({
                 <div style={{ width: "100%" }}>
                   <div class="split-head">
                     <div class="list-row-main">
-                      <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: "8px",
+                          alignItems: "center",
+                          flexWrap: "wrap",
+                        }}
+                      >
                         <strong>{m.id}</strong>
                         {m.recommended ? (
-                          <Badge tone="info">{en ? "Recommended" : "推荐"}</Badge>
+                          <Badge tone="info">
+                            {en ? "Recommended" : "推荐"}
+                          </Badge>
                         ) : null}
-                        {fit ? <Badge tone={fit.tone}>{fit.label}</Badge> : null}
+                        {fit ? (
+                          <Badge tone={fit.tone}>{fit.label}</Badge>
+                        ) : null}
                         {alreadyInstalled ? (
-                          <Badge tone="success">{en ? "Installed" : "已安装"}</Badge>
+                          <Badge tone="success">
+                            {en ? "Installed" : "已安装"}
+                          </Badge>
                         ) : null}
                       </div>
                       <p class="hint">
@@ -542,39 +614,48 @@ export function ModelsPage({
                           formatBytes(m.size, uiLang),
                           (m.format || "gguf").toUpperCase(),
                           fit
-                            ? `${en ? "Est. RAM/VRAM" : "预计内存占用"} ~${formatBytes(fit.estimated, uiLang)}`
+                            ? `${en ? "Est. RAM/VRAM" : "预计占用"} ~${formatBytes(fit.estimated, uiLang)}`
                             : "",
                         ]
                           .filter(Boolean)
                           .join(" · ")}
                       </p>
                       {rec ? (
-                        <p class="hint" style={{ color: "var(--accent)", marginTop: "4px" }}>
+                        <p
+                          class="hint"
+                          style={{
+                            color: "var(--color-accent)",
+                            marginTop: "4px",
+                          }}
+                        >
                           {en
-                            ? `Hardware check: Recommended ${rec.backend.toUpperCase()}, Context ${rec.tuning.context || 4096}, Est. footprint ${formatBytes(rec.estimated_bytes, uiLang)}`
-                            : `本机评估：推荐 ${rec.backend.toUpperCase()} 后端 · 上下文 ${rec.tuning.context || 4096} · 预计占用 ${formatBytes(rec.estimated_bytes, uiLang)}`}
+                            ? `Recommended ${rec.backend.toUpperCase()} · Context ${rec.tuning.context || 4096} · Est. ${formatBytes(rec.estimated_bytes, uiLang)}`
+                            : `本机评估：推荐 ${rec.backend.toUpperCase()} · 上下文 ${rec.tuning.context || 4096} · 预计 ${formatBytes(rec.estimated_bytes, uiLang)}`}
                         </p>
                       ) : null}
                     </div>
-                    <div class="actions">
+                    <div class="actions" style={{ margin: 0 }}>
                       <Button
+                        size="sm"
                         busy={store.isBusy(`models:rec:${m.id}`)}
                         onClick={() => void handlePreviewRecommend(m)}
                       >
-                        {en ? "Evaluate fit" : "评估硬件适配"}
+                        {en ? "Evaluate Fit" : "评估适配"}
                       </Button>
                       <Button
+                        size="sm"
                         variant={alreadyInstalled ? "secondary" : "primary"}
+                        icon={<IconDownload size={13} />}
                         busy={store.isBusy(`models:dl:${m.id}`)}
                         onClick={() => void handleInstallModel(m)}
                       >
                         {alreadyInstalled
                           ? en
-                            ? "Re-verify / Repair"
-                            : "校验或重下"
+                            ? "Verify / Repair"
+                            : "校验重下"
                           : en
                             ? "Download"
-                            : "下载模型"}
+                            : "下载"}
                       </Button>
                     </div>
                   </div>
@@ -583,7 +664,7 @@ export function ModelsPage({
             }}
           />
         )}
-      </fieldset>
+      </SettingGroup>
     </section>
   );
 }

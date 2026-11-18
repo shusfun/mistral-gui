@@ -2,13 +2,20 @@ Unicode true
 !ifndef VERSION
 !define VERSION "0.1.0"
 !endif
-Name "mistral-gui"
+Name "mistral"
+VIProductVersion "${VERSION}.0"
+VIAddVersionKey /LANG=1033 "ProductName" "mistral"
+VIAddVersionKey /LANG=1033 "ProductVersion" "${VERSION}"
+VIAddVersionKey /LANG=1033 "FileVersion" "${VERSION}"
+VIAddVersionKey /LANG=1033 "FileDescription" "mistral installer"
 OutFile "..\..\dist\mistral-gui-windows-x64-setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\mistral-gui"
 InstallDirRegKey HKCU "Software\mistral-gui" "InstallDir"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 !include "MUI2.nsh"
+!define MUI_ICON "..\..\internal\branding\assets\app.ico"
+!define MUI_UNICON "..\..\internal\branding\assets\app.ico"
 !include "FileFunc.nsh"
 !define MUI_LANGDLL_REGISTRY_ROOT HKCU
 !define MUI_LANGDLL_REGISTRY_KEY "Software\mistral-gui"
@@ -39,7 +46,7 @@ Function Launch
   StrCpy $0 "zh-CN"
   Exec '"$INSTDIR\mistral-gui.exe" --language $0'
 FunctionEnd
-Section "mistral-gui"
+Section "mistral"
   SetShellVarContext current
   IfFileExists "$INSTDIR\mistral-gui.exe" 0 +4
   ExecWait '"$INSTDIR\mistral-gui.exe" --data-dir "$APPDATA\mistral-gui" --quit'
@@ -48,12 +55,16 @@ Section "mistral-gui"
   SetOutPath "$INSTDIR"
   File "..\..\dist\mistral-gui.exe"
   WriteUninstaller "$INSTDIR\uninstall.exe"
-  CreateDirectory "$SMPROGRAMS\mistral-gui"
-  CreateShortcut "$SMPROGRAMS\mistral-gui\mistral-gui.lnk" "$INSTDIR\mistral-gui.exe"
-  CreateShortcut "$SMPROGRAMS\mistral-gui\Uninstall.lnk" "$INSTDIR\uninstall.exe"
-  CreateShortcut "$DESKTOP\mistral-gui.lnk" "$INSTDIR\mistral-gui.exe"
+  CreateDirectory "$SMPROGRAMS\mistral"
+  IfFileExists "$SMPROGRAMS\mistral\mistral.lnk" +2 0
+  CreateShortcut "$SMPROGRAMS\mistral\mistral.lnk" "$INSTDIR\mistral-gui.exe" "" "$INSTDIR\mistral-gui.exe" 0
+  IfFileExists "$SMPROGRAMS\mistral\Uninstall.lnk" +2 0
+  CreateShortcut "$SMPROGRAMS\mistral\Uninstall.lnk" "$INSTDIR\uninstall.exe"
+  IfFileExists "$DESKTOP\mistral.lnk" +2 0
+  CreateShortcut "$DESKTOP\mistral.lnk" "$INSTDIR\mistral-gui.exe" "" "$INSTDIR\mistral-gui.exe" 0
   WriteRegStr HKCU "Software\mistral-gui" "InstallDir" "$INSTDIR"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\mistral-gui" "DisplayName" "mistral-gui"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\mistral-gui" "DisplayName" "mistral"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\mistral-gui" "DisplayIcon" "$INSTDIR\mistral-gui.exe,0"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\mistral-gui" "DisplayVersion" "${VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\mistral-gui" "UninstallString" '$\"$INSTDIR\uninstall.exe$\"'
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\mistral-gui" "NoModify" 1
@@ -76,6 +87,10 @@ Section "Uninstall"
   RMDir /r "$INSTDIR\.mistral-gui-unpack"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
+  Delete "$DESKTOP\mistral.lnk"
+  Delete "$SMPROGRAMS\mistral\mistral.lnk"
+  Delete "$SMPROGRAMS\mistral\Uninstall.lnk"
+  RMDir "$SMPROGRAMS\mistral"
   Delete "$DESKTOP\mistral-gui.lnk"
   Delete "$SMPROGRAMS\mistral-gui\mistral-gui.lnk"
   Delete "$SMPROGRAMS\mistral-gui\Uninstall.lnk"

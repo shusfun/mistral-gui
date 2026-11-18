@@ -8,12 +8,20 @@ APP="$ROOT/dist/mistral-gui.app"
 rm -rf "$ROOT/dist/dmg-root"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$ROOT/dist/dmg-root"
 cp "$ROOT/dist/mistral-gui" "$APP/Contents/MacOS/mistral-gui"
+cp "$ROOT/internal/branding/assets/app.icns" "$APP/Contents/Resources/app.icns"
+for language in en zh_CN; do
+  mkdir -p "$APP/Contents/Resources/$language.lproj"
+  printf '"CFBundleDisplayName" = "mistral";\n"CFBundleName" = "mistral";\n' > "$APP/Contents/Resources/$language.lproj/InfoPlist.strings"
+done
 chmod +x "$APP/Contents/MacOS/mistral-gui" "$ROOT/dist/mistral-gui-updater"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleName</key><string>mistral-gui</string>
+<key>CFBundleName</key><string>mistral</string>
+<key>CFBundleDisplayName</key><string>mistral</string>
+<key>CFBundleIconFile</key><string>app</string>
+<key>LSHasLocalizedDisplayName</key><true/>
 <key>CFBundleIdentifier</key><string>com.shusfun.mistral-gui</string>
 <key>CFBundleShortVersionString</key><string>$VERSION</string>
 <key>CFBundleVersion</key><string>$VERSION</string>
@@ -36,7 +44,7 @@ fi
 ditto "$APP" "$ROOT/dist/dmg-root/mistral-gui.app"
 ln -s /Applications "$ROOT/dist/dmg-root/Applications"
 DMG="$ROOT/dist/mistral-gui-macos-$LABEL.dmg"
-hdiutil create -volname "mistral-gui" -srcfolder "$ROOT/dist/dmg-root" -ov -format UDZO "$DMG"
+hdiutil create -volname "mistral" -srcfolder "$ROOT/dist/dmg-root" -ov -format UDZO "$DMG"
 if [ -n "${MAC_SIGN_IDENTITY:-}" ]; then
   codesign --force --timestamp --sign "$MAC_SIGN_IDENTITY" "$DMG"
   xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait

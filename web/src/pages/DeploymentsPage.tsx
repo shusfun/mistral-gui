@@ -6,10 +6,22 @@ import {
   DataList,
   Disclosure,
   FeedbackBanner,
+  IconArrowLeft,
+  IconBox,
+  IconExternalLink,
+  IconPlay,
+  IconPlus,
+  IconRefresh,
+  IconSquare,
+  IconTrash,
   Select,
+  SettingGroup,
+  SettingRow,
   Switch,
+  NumberStepper,
+  Slider,
+  SearchInput,
   TextInput,
-  VerdictHero,
   confirmAction,
   createRequestGate,
   feedbackStore,
@@ -19,12 +31,13 @@ import {
   toast,
   useFeedbackStore,
 } from "../shared/design-system";
-import { api, isDesktopMode, nativeCommand } from "../api";
+import { api, isDesktopMode, nativeCommand, traceUiSave } from "../api";
 import {
   formatBackend,
   formatRuntimeState,
   formatStage,
   formatStep,
+  t,
   toUiLang,
   type ManagerLocale,
 } from "../i18n";
@@ -49,31 +62,29 @@ export function DeploymentsPage({
   subPath: string; // "" | "new" | "<deploymentId>"
   installedModels: CatalogAsset[];
   locale: ManagerLocale;
-  onRefresh: () => Promise<void>;
+  onRefresh: (trace?: string) => Promise<void>;
   onNavigateHash: (hash: string) => void;
 }) {
   const store = useFeedbackStore();
   const uiLang = toUiLang(locale);
   const en = uiLang === "en";
 
-  // List filter & search state (M-38, M-42)
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
 
-  // Per-deployment test result map & log drawer state (M-03, M-16, M-R3)
   const [testResults, setTestResults] = useState<
     Record<string, { latencyMs: number; sample: string }>
   >({});
   const [engineLogs, setEngineLogs] = useState<Record<string, string>>({});
 
-  // Detail / Editor form state
   const isCreateMode = subPath === "new";
-  const editingDep = !isCreateMode && subPath
-    ? data.deployments.find((d) => d.id === subPath) || null
-    : null;
+  const editingDep =
+    !isCreateMode && subPath
+      ? data.deployments.find((d) => d.id === subPath) || null
+      : null;
 
   const [formId, setFormId] = useState("");
-  const [formModelKey, setFormModelKey] = useState(""); // "<id>@<version>"
+  const [formModelKey, setFormModelKey] = useState("");
   const [formBackend, setFormBackend] = useState("auto");
   const [formAutoStart, setFormAutoStart] = useState(true);
   const [formIdleMinutes, setFormIdleMinutes] = useState(10);
@@ -91,7 +102,6 @@ export function DeploymentsPage({
   const [recommendation, setRecommendation] =
     useState<RecommendationResponse | null>(null);
 
-  // M-40: Monotonic request gates so rapid backend/model switches never apply stale responses!
   const capGateRef = useRef(createRequestGate());
   const recGateRef = useRef(createRequestGate());
 
@@ -111,7 +121,6 @@ export function DeploymentsPage({
     }
   };
 
-  // Sync editor form when navigating into "new" or "<id>" (M-VA: preselect matching installed revision even when d.model_version was empty)
   useEffect(() => {
     if (!isCreateMode && !editingDep) return;
     if (isCreateMode) {
@@ -141,7 +150,8 @@ export function DeploymentsPage({
         installedModels.find(
           (m) =>
             m.id === editingDep.model &&
-            (!editingDep.model_version || m.version === editingDep.model_version),
+            (!editingDep.model_version ||
+              m.version === editingDep.model_version),
         ) || null;
       setFormModelKey(
         matchedInstalled
@@ -157,7 +167,7 @@ export function DeploymentsPage({
       setFormContext(editingDep.tuning?.context || 0);
       setFormSequences(editingDep.tuning?.sequences || 0);
       setFormGpuLayers(editingDep.tuning?.gpu_layers || 0);
-      setFormGpuUtil(editingDep.tuning?.gpu_utilization || 0);
+      setFormGpuUtil(editingDep.tuning?.gpu_memory_utilization || 0);
       setFormKvCache(editingDep.tuning?.kv_cache || "");
       setFormIsq(editingDep.tuning?.isq || "");
       setFormBatchTokens(editingDep.tuning?.batch_tokens || 0);
@@ -174,23 +184,28 @@ export function DeploymentsPage({
           (depId === "default" && !op.deployment_id && op.kind === "prepare")),
     );
 
-  // M-13: Real-time deployment runtime state ALWAYS takes precedence over historical failed/completed tasks; only running prepare task overlays step!
   const effectiveStatusBadge = (d: DeploymentView) => {
     const activeOp = activePrepareOpFor(d.id);
     const st = d.status.state;
     if (st === "running") {
-      return { tone: "success" as const, text: formatRuntimeState(locale, "running") };
+      return {
+        tone: "success" as const,
+        text: formatRuntimeState(locale, "running"),
+      };
     }
     if (st === "starting" || st === "loading") {
       return {
         tone: "info" as const,
-        text: formatStage(locale, d.status.stage) || formatRuntimeState(locale, st),
+        text:
+          formatStage(locale, d.status.stage) || formatRuntimeState(locale, st),
       };
     }
     if (activeOp) {
       return {
         tone: "info" as const,
-        text: formatStep(locale, activeOp.step) || formatRuntimeState(locale, "loading"),
+        text:
+          formatStep(locale, activeOp.step) ||
+          formatRuntimeState(locale, "loading"),
       };
     }
     if (st === "failed" || st === "cooldown") {
@@ -199,7 +214,10 @@ export function DeploymentsPage({
     if (st === "stopping") {
       return { tone: "warning" as const, text: formatRuntimeState(locale, st) };
     }
-    return { tone: "neutral" as const, text: formatRuntimeState(locale, st || "stopped") };
+    return {
+      tone: "neutral" as const,
+      text: formatRuntimeState(locale, st || "stopped"),
+    };
   };
 
   const handleDeploymentRuntime = (
@@ -212,7 +230,6 @@ export function DeploymentsPage({
         const q = d.default ? "" : `?model=${encodeURIComponent(d.id)}`;
         await api(`/api/v1/runtime/${action}${q}`, {});
         if (action === "start" || action === "restart") {
-          // Clear stale test sample on state transition (M-16)
           setTestResults((prev) => {
             const copy = { ...prev };
             delete copy[d.id];
@@ -253,7 +270,6 @@ export function DeploymentsPage({
       },
     );
 
-  // M-02 & M-26: Accurate confirmation clarifying model weights stay intact, and guard running state!
   const handleDeleteDeployment = async (d: DeploymentView) => {
     if (d.default) return;
     if (
@@ -271,8 +287,8 @@ export function DeploymentsPage({
     const ok = await confirmAction({
       title: en ? "Delete Deployment Configuration" : "删除部署实例配置",
       message: en
-        ? `Remove deployment "${d.id}"? Downloaded model weights (${d.model}) and runtime binaries will NOT be deleted and remain available in Models & Runtime.`
-        : `确定移除部署实例「${d.id}」吗？此操作仅删除该部署参数配置，已下载的模型权重（${d.model}）与推理运行时文件均会完整保留在「模型与运行时」库中。`,
+        ? `Remove deployment "${d.id}"? Downloaded model weights (${d.model}) and runtime binaries will NOT be deleted.`
+        : `确定移除部署实例「${d.id}」吗？仅删除该部署配置，已下载的模型权重（${d.model}）与运行时文件均会完整保留。`,
       danger: true,
       lang: uiLang,
     });
@@ -328,7 +344,8 @@ export function DeploymentsPage({
         const res = await api<{ logs: string }>(`/api/v1/deployments/logs${q}`);
         setEngineLogs((prev) => ({
           ...prev,
-          [d.id]: res.logs || (en ? "(No engine output yet)" : "（暂无引擎运行输出）"),
+          [d.id]:
+            res.logs || (en ? "(No engine output yet)" : "（暂无引擎运行输出）"),
         }));
       },
     );
@@ -361,7 +378,6 @@ export function DeploymentsPage({
       },
     );
 
-  // M-41 & M-VE: Explicit client-side validation + single atomic prepare/save flow
   const handleSaveDeployment = (deployAndStart: boolean) =>
     runTracked(
       {
@@ -369,7 +385,7 @@ export function DeploymentsPage({
         scope: "dep-editor",
         lang: uiLang,
       },
-      async () => {
+      () => traceUiSave(async trace => {
         const isDefault = editingDep?.default === true;
         const cleanId = isDefault ? "default" : formId.trim();
         if (!isDefault) {
@@ -389,7 +405,10 @@ export function DeploymentsPage({
         const [model, model_version] = formModelKey.split("@");
         if (!model) throw new Error("chooseModel");
 
-        if (formKvCache.trim() && !/^\d+(?:MiB|GiB|tokens)$/.test(formKvCache.trim())) {
+        if (
+          formKvCache.trim() &&
+          !/^\d+(?:MiB|GiB|tokens)$/.test(formKvCache.trim())
+        ) {
           throw new Error("invalid_kv_cache");
         }
         if (formIdleMinutes < 0 || formIdleMinutes > 1440) {
@@ -414,14 +433,15 @@ export function DeploymentsPage({
           context: Number(formContext) || 0,
           sequences: Number(formSequences) || 0,
           gpu_layers: Number(formGpuLayers) || 0,
-          gpu_utilization: Number(formGpuUtil) || 0,
+          gpu_memory_utilization: formGpuUtil,
           kv_cache: formKvCache.trim(),
           isq: formIsq,
           batch_tokens: Number(formBatchTokens) || 0,
         };
 
         const matchedAsset = installedModels.find(
-          (m) => m.id === model && (!model_version || m.version === model_version),
+          (m) =>
+            m.id === model && (!model_version || m.version === model_version),
         );
 
         if (deployAndStart) {
@@ -437,7 +457,7 @@ export function DeploymentsPage({
             auto_start: formAutoStart,
             idle_minutes: Number(formIdleMinutes) || 0,
             tuning,
-          });
+          }, { trace });
           toast(
             en
               ? `Deployment ${cleanId} preparation & startup queued.`
@@ -446,13 +466,16 @@ export function DeploymentsPage({
           );
         } else if (isDefault) {
           await api("/api/v1/settings", {
-            model,
-            model_version: model_version || "",
+            ...(model !== editingDep.model || (model_version || "") !== (editingDep.model_version || "")
+              ? { model, model_version: model_version || "" } : {}),
             backend: formBackend,
             auto_start: formAutoStart,
             idle_minutes: Number(formIdleMinutes) || 0,
-          });
-          toast(en ? "Saved default deployment." : "已保存默认实例配置。", "success");
+          }, { trace });
+          toast(
+            en ? "Saved default deployment." : "已保存默认实例配置。",
+            "success",
+          );
         } else {
           await api("/api/v1/deployments", {
             id: cleanId,
@@ -462,15 +485,15 @@ export function DeploymentsPage({
             auto_start: formAutoStart,
             idle_minutes: Number(formIdleMinutes) || 0,
             tuning,
-          });
+          }, { trace });
           toast(
             en ? `Saved deployment ${cleanId}.` : `已保存部署实例 ${cleanId}。`,
             "success",
           );
         }
-        await onRefresh();
+        await onRefresh(trace);
         onNavigateHash("#instances");
-      },
+      }),
     );
 
   // --- Detail / Create View ---
@@ -481,31 +504,30 @@ export function DeploymentsPage({
       (editingDep.status.state === "running" ||
         editingDep.status.state === "starting" ||
         editingDep.status.state === "loading");
-    const cap = capabilities?.tuning || {};
+    const cap = capabilities?.features || {};
 
     return (
       <section class="panel mg-section">
-        <div class="split-head" style={{ marginBottom: "14px" }}>
-          <div>
-            <p class="eyebrow">
+        <div class="mg-page-head">
+          <div class="mg-page-title-group">
+            <h1 class="mg-page-title">
               {isCreateMode
                 ? en
-                  ? "NEW DEPLOYMENT"
-                  : "新建独立部署实例"
-                : en
-                  ? "CONFIGURE DEPLOYMENT"
-                  : "配置部署实例"}
-            </p>
-            <h2 style={{ margin: 0 }}>
-              {isCreateMode
-                ? en
-                  ? "Create Deployment Instance"
-                  : "新建模型部署实例"
-                : `${editingDep!.id}${isDefault ? (en ? " (Default)" : "（默认实例）") : ""}`}
-            </h2>
+                  ? "New Deployment"
+                  : "新建部署实例"
+                : editingDep!.id}
+            </h1>
+            {isDefault ? (
+              <Badge tone="neutral">{en ? "Default" : "默认实例"}</Badge>
+            ) : null}
           </div>
-          <Button variant="ghost" onClick={() => onNavigateHash("#instances")}>
-            {en ? "← Back to Deployments" : "← 返回部署列表"}
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<IconArrowLeft size={14} />}
+            onClick={() => onNavigateHash("#instances")}
+          >
+            {en ? "Back to Deployments" : "返回部署列表"}
           </Button>
         </div>
 
@@ -514,30 +536,50 @@ export function DeploymentsPage({
         {isRunningNow ? (
           <div class="feedback-banner" data-tone="info" role="status">
             {en
-              ? "This deployment is currently running. Use 'Deploy & Restart' to apply changes seamlessly, or stop it first before saving static settings."
-              : "该部署当前正在运行中：点击「部署并重启生效」可平滑重启应用新参数，或先停止实例后再仅保存配置。"}
+              ? "This deployment is currently running. Use 'Deploy & Restart' to apply changes seamlessly."
+              : "该实例正在运行中：点击「部署并重启生效」可平滑应用新参数。"}
           </div>
         ) : null}
 
-        <fieldset>
-          <legend>{en ? "Identity & Model" : "实例标识与模型选择"}</legend>
-          <div class="grid-2">
+        <SettingGroup
+          title={en ? "Model & Runtime Policy" : "模型选择与运行策略"}
+          actions={
+            <Button
+              size="sm"
+              busy={store.isBusy("dep-form:recommend")}
+              disabled={!formModelKey}
+              onClick={handleRecommend}
+            >
+              {en ? "Auto-recommend" : "按本机硬件自动推荐"}
+            </Button>
+          }
+        >
+          <SettingRow
+            title={en ? "Deployment ID" : "部署实例 ID"}
+            description={
+              isCreateMode
+                ? en
+                  ? "Letters, digits, '.', '_', or '-' (not 'default' or 'new')"
+                  : "以字母或数字开头，供轻译或 OpenAI 客户端按名调用"
+                : en
+                  ? "Identifier used in model parameter"
+                  : "客户端调用标识"
+            }
+            controlWidth="wide"
+          >
             <TextInput
-              label={en ? "Deployment ID" : "部署实例 ID（供 API / 轻译指定调用）"}
               placeholder="translation-fast"
               disabled={!isCreateMode}
               value={isDefault ? "default" : formId}
-              hint={
-                isCreateMode
-                  ? en
-                    ? "Letters, digits, '.', '_', or '-' (cannot be 'default' or 'new')."
-                    : "以字母或数字开头，可含 . _ -（不可使用保留名 default 或 new）。"
-                  : undefined
-              }
               onValueInput={(v) => setFormId(v)}
             />
+          </SettingRow>
+
+          <SettingRow
+            title={en ? "Installed Model" : "绑定本地模型"}
+            controlWidth="wide"
+          >
             <Select
-              label={en ? "Installed Model" : "选择已安装模型"}
               value={formModelKey}
               options={
                 installedModels.length > 0
@@ -551,18 +593,20 @@ export function DeploymentsPage({
                         label:
                           formModelKey ||
                           (en
-                            ? "No models installed yet — download on Models page"
-                            : "尚未安装模型（请先前往模型与运行时页下载）"),
+                            ? "No models installed yet"
+                            : "尚未安装模型（请先前往模型库下载）"),
                       },
                     ]
               }
               onValueChange={(v) => setFormModelKey(v)}
             />
-          </div>
+          </SettingRow>
 
-          <div class="grid-3" style={{ marginTop: "12px" }}>
+          <SettingRow
+            title={en ? "Acceleration Backend" : "推理加速后端"}
+            controlWidth="medium"
+          >
             <Select
-              label={en ? "Acceleration Backend" : "推理加速后端"}
               value={formBackend}
               options={[
                 { value: "auto", label: formatBackend(locale, "auto") },
@@ -575,120 +619,132 @@ export function DeploymentsPage({
                 void loadCapabilities(v);
               }}
             />
-            <TextInput
-              label={en ? "Idle auto-stop (minutes)" : "空闲自动卸载（分钟，0 为常驻）"}
-              type="number"
+          </SettingRow>
+
+          <SettingRow
+            title={en ? "Idle Auto-Unload (minutes)" : "空闲自动卸载（分钟）"}
+            description={
+              en ? "0 keeps model resident in memory" : "填 0 表示常驻不自动释放"
+            }
+            controlWidth="narrow"
+          >
+            <NumberStepper
+              en={en} name={en ? "Idle auto-unload" : "空闲自动卸载"} unit={en ? "min" : "分钟"}
               min={0}
               max={1440}
               value={formIdleMinutes}
               onValueInput={(v) => setFormIdleMinutes(Number(v) || 0)}
             />
-            <div style={{ display: "flex", alignItems: "end" }}>
-              <Button
-                busy={store.isBusy("dep-form:recommend")}
-                disabled={!formModelKey}
-                onClick={handleRecommend}
-              >
-                {en ? "Auto-recommend for hardware" : "按本机硬件自动推荐参数"}
-              </Button>
-            </div>
-          </div>
+          </SettingRow>
 
-          <div style={{ marginTop: "10px" }}>
+          <SettingRow
+            title={en ? "Auto-Start on Request" : "按需自动唤醒"}
+            description={
+              en
+                ? "Automatically load model when API requests arrive"
+                : "收到轻译或 API 请求时自动拉起此实例"
+            }
+          >
             <Switch
               checked={formAutoStart}
               onChange={(c) => setFormAutoStart(c)}
-              label={
-                en
-                  ? "Auto-start on incoming translation / API request"
-                  : "收到轻译或 API 请求时自动按需唤醒此实例"
-              }
             />
+          </SettingRow>
+
+          <SettingRow
+            title={en ? "Hardware Memory Guardrails" : "启动时显存保护校准"}
+            description={
+              en
+                ? "Auto-adjust tuning parameters to fit available RAM/VRAM"
+                : "部署启动时自动根据可用内存/显存保护性校准参数"
+            }
+          >
             <Switch
               checked={formRecommend}
               onChange={(c) => setFormRecommend(c)}
-              label={
-                en
-                  ? "Apply hardware memory guardrails during Deploy & Start"
-                  : "部署并启动时自动根据可用显存/内存校准参数"
-              }
             />
-          </div>
+          </SettingRow>
+        </SettingGroup>
 
-          {recommendation ? (
-            <div class="card">
-              <strong>
-                {en
-                  ? `Recommended: ${recommendation.backend.toUpperCase()} · Est. runtime footprint ${formatBytes(recommendation.estimated_bytes, uiLang)}`
-                  : `硬件推荐：${recommendation.backend.toUpperCase()} · 预计常驻占用 ${formatBytes(recommendation.estimated_bytes, uiLang)}（加载峰值 ${formatBytes(recommendation.estimated_loading_bytes, uiLang)}）`}
-              </strong>
-              {recommendation.warnings.length > 0 ? (
-                <p class="hint">
-                  {recommendation.warnings
-                    .map((w) => resolveError(w, uiLang).message)
-                    .join(" ")}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-        </fieldset>
+        {recommendation ? (
+          <div class="feedback-banner" data-tone="info">
+            <strong>
+              {en
+                ? `Recommended: ${recommendation.backend.toUpperCase()} · Est. footprint ${formatBytes(recommendation.estimated_bytes, uiLang)}`
+                : `硬件推荐：${recommendation.backend.toUpperCase()} · 预计常驻 ${formatBytes(recommendation.estimated_bytes, uiLang)}（加载峰值 ${formatBytes(recommendation.estimated_loading_bytes, uiLang)}）`}
+            </strong>
+            {recommendation.warnings.length > 0 ? (
+              <div class="hint" style={{ marginTop: "4px" }}>
+                {recommendation.warnings
+                  .map((w) => resolveError(w, uiLang).message)
+                  .join(" ")}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         {!isDefault ? (
           <Disclosure
             summary={
               en
                 ? "Advanced Inference Tuning (Context, KV Cache, ISQ)"
-                : "高级推理调优（上下文长度、KV Cache、加载时量化 ISQ）"
+                : "高级推理调优（上下文长度、KV Cache、加载量化 ISQ）"
             }
           >
-            <div class="grid-3" style={{ marginTop: "12px" }}>
-              <TextInput
-                label={en ? "Max Context Tokens" : "最大上下文长度（0 跟随引擎）"}
-                type="number"
+            <div class="grid-3">
+              <NumberStepper
+                label={en ? "Max Context Tokens" : "最大上下文长度（0 默认）"}
+                en={en}
                 min={0}
                 max={1048576}
                 value={formContext}
                 onValueInput={(v) => setFormContext(Number(v) || 0)}
               />
-              <TextInput
+              <NumberStepper
                 label={en ? "Max Concurrent Sequences" : "最大并发序列数"}
-                type="number"
+                en={en}
                 min={0}
                 max={4096}
                 value={formSequences}
                 onValueInput={(v) => setFormSequences(Number(v) || 0)}
               />
               <Select
-                label={en ? "In-Situ Quantization (ISQ)" : "safetensors 加载量化（ISQ）"}
+                label={
+                  en ? "In-Situ Quantization (ISQ)" : "safetensors 加载量化"
+                }
                 value={formIsq}
                 options={[
-                  { value: "", label: en ? "None (GGUF native)" : "不启用（GGUF 原生量化）" },
+                  {
+                    value: "",
+                    label: en ? "None (GGUF native)" : "不启用（GGUF 原生）",
+                  },
                   { value: "Q4K", label: "Q4K" },
                   { value: "Q6K", label: "Q6K" },
                   { value: "Q8_0", label: "Q8_0" },
                 ]}
                 onValueChange={(v) => setFormIsq(v)}
               />
-              <TextInput
+              <NumberStepper
                 label={en ? "GPU Offload Layers" : "GPU 加载层数（0 自动）"}
-                type="number"
+                en={en}
                 min={0}
                 disabled={cap.gpu_layers === false || formBackend === "cpu"}
                 value={formGpuLayers}
                 onValueInput={(v) => setFormGpuLayers(Number(v) || 0)}
               />
-              <TextInput
-                label={en ? "GPU Memory Utilization (0–1)" : "显存占用上限比例（0–1）"}
-                type="number"
+              <Slider
+                label={en ? "GPU Utilization (0–1)" : "显存占用比例（0–1）"}
                 min={0}
                 max={1}
                 step={0.05}
-                disabled={cap.gpu_utilization === false || formBackend === "cpu"}
+                disabled={
+                  cap.gpu_memory_utilization === false || formBackend === "cpu"
+                }
                 value={formGpuUtil}
-                onValueInput={(v) => setFormGpuUtil(Number(v) || 0)}
+                onValueInput={(v) => setFormGpuUtil(v)}
               />
               <TextInput
-                label={en ? "KV Cache Limit" : "KV Cache 上限（如 512MiB / 4GiB）"}
+                label={en ? "KV Cache Limit" : "KV Cache 上限（如 512MiB）"}
                 placeholder="512MiB"
                 disabled={cap.kv_cache === false || formBackend === "cpu"}
                 value={formKvCache}
@@ -717,7 +773,7 @@ export function DeploymentsPage({
             disabled={Boolean(isRunningNow)}
             onClick={() => void handleSaveDeployment(false)}
           >
-            {en ? "Save configuration only" : "仅保存配置（不启动）"}
+            {en ? "Save Configuration Only" : "仅保存配置"}
           </Button>
           <Button variant="ghost" onClick={() => onNavigateHash("#instances")}>
             {en ? "Cancel" : "取消"}
@@ -728,7 +784,6 @@ export function DeploymentsPage({
   }
 
   // --- Deployments List View ---
-  // M-38: Scoped search on ID, model, backend ONLY (not hidden JSON/stacktraces!) + complete state filter
   const qLower = searchQuery.trim().toLowerCase();
   const filteredDeployments = data.deployments.filter((d) => {
     if (statusFilter !== "all" && d.status.state !== statusFilter) {
@@ -744,302 +799,360 @@ export function DeploymentsPage({
 
   return (
     <section class="panel mg-section">
-      {/* M-37: Button label matches exact navigation target ("新建部署实例" -> #instances/new) */}
-      <VerdictHero
-        eyebrow={en ? "MULTI-MODEL DEPLOYMENTS" : "多模型部署实例管理"}
-        title={
-          en
-            ? `${data.deployments.length} configured deployment(s)`
-            : `共配置 ${data.deployments.length} 个模型部署实例`
-        }
-        description={
-          en
-            ? "Each deployment binds a model, acceleration backend, and idle policy, addressable by its Deployment ID from Qingyi or OpenAI clients."
-            : "每个部署独立绑定模型版本、加速后端与空闲策略；轻译扩展或任意 OpenAI 客户端均可通过部署 ID 直接按需调用。"
-        }
-        actions={
-          <>
-            <Button
-              variant="primary"
-              onClick={() => onNavigateHash("#instances/new")}
-            >
-              {en ? "+ New Deployment" : "+ 新建部署实例"}
-            </Button>
-            <Button onClick={() => onNavigateHash("#models")}>
-              {en ? "Browse & Download Models" : "前往模型库下载更多模型"}
-            </Button>
-          </>
-        }
-      />
+      <div class="mg-page-head">
+        <div class="mg-page-title-group">
+          <h1 class="mg-page-title">{t(locale, "navInstances")}</h1>
+          <Badge tone="neutral">{data.deployments.length}</Badge>
+        </div>
+        <div class="actions" style={{ margin: 0 }}>
+          <Button
+            variant="primary"
+            size="sm"
+            icon={<IconPlus size={14} />}
+            onClick={() => onNavigateHash("#instances/new")}
+          >
+            {en ? "New Deployment" : "新建部署实例"}
+          </Button>
+          <Button
+            size="sm"
+            icon={<IconBox size={14} />}
+            onClick={() => onNavigateHash("#models")}
+          >
+            {en ? "Models & Runtime" : "模型库"}
+          </Button>
+        </div>
+      </div>
 
       <FeedbackBanner scope="deployments" lang={uiLang} />
 
-      {/* M-42 & M-38: Full-width search bar + complete status filter options */}
       <div class="mg-filter-bar">
-        <TextInput
-          type="search"
-          label={en ? "Search by ID, model, or backend" : "搜索部署 ID、模型名称或后端"}
-          placeholder={en ? "Filter deployments…" : "输入部署 ID 或模型关键词筛选…"}
+        <SearchInput
+          en={en}
+          placeholder={
+            en
+              ? "Filter by ID, model, or backend…"
+              : "搜索部署 ID、模型名称或后端…"
+          }
           value={searchQuery}
           onValueInput={(v) => setSearchQuery(v)}
         />
-        <Select
-          label={en ? "Runtime Status" : "状态筛选"}
-          value={statusFilter}
-          options={[
-            { value: "all", label: en ? "All states" : "全部状态" },
-            { value: "running", label: formatRuntimeState(locale, "running") },
-            { value: "loading", label: formatRuntimeState(locale, "loading") },
-            { value: "starting", label: formatRuntimeState(locale, "starting") },
-            { value: "stopped", label: formatRuntimeState(locale, "stopped") },
-            { value: "stopping", label: formatRuntimeState(locale, "stopping") },
-            { value: "failed", label: formatRuntimeState(locale, "failed") },
-            { value: "cooldown", label: formatRuntimeState(locale, "cooldown") },
-          ]}
-          onValueChange={(v) => setStatusFilter(v)}
-        />
+        <div style={{ width: "160px" }}>
+          <Select
+            value={statusFilter}
+            options={[
+              { value: "all", label: en ? "All states" : "全部状态" },
+              {
+                value: "running",
+                label: formatRuntimeState(locale, "running"),
+              },
+              {
+                value: "loading",
+                label: formatRuntimeState(locale, "loading"),
+              },
+              {
+                value: "starting",
+                label: formatRuntimeState(locale, "starting"),
+              },
+              {
+                value: "stopped",
+                label: formatRuntimeState(locale, "stopped"),
+              },
+              {
+                value: "stopping",
+                label: formatRuntimeState(locale, "stopping"),
+              },
+              { value: "failed", label: formatRuntimeState(locale, "failed") },
+              {
+                value: "cooldown",
+                label: formatRuntimeState(locale, "cooldown"),
+              },
+            ]}
+            onValueChange={(v) => setStatusFilter(v)}
+          />
+        </div>
       </div>
 
-      <DataList
-        items={filteredDeployments}
-        getKey={(d) => d.id}
-        emptyMessage={
-          en
-            ? "No deployments match the current filter."
-            : "没有匹配当前筛选条件的部署实例。"
-        }
-        lang={uiLang}
-        renderItem={(d) => {
-          const badge = effectiveStatusBadge(d);
-          const st = d.status.state;
-          const isRunning = st === "running";
-          const isTransitioning = st === "starting" || st === "loading";
-          const isBusyRow =
-            store.isBusy(`dep:${d.id}:start`) ||
-            store.isBusy(`dep:${d.id}:stop`) ||
-            store.isBusy(`dep:${d.id}:restart`) ||
-            store.isBusy(`dep:${d.id}:delete`) ||
-            store.isBusy(`dep:${d.id}:rollback`);
-          const sample = testResults[d.id];
+      <SettingGroup padded>
+        <DataList
+          items={filteredDeployments}
+          getKey={(d) => d.id}
+          emptyMessage={
+            en
+              ? "No deployments match the current filter."
+              : "没有匹配筛选条件的部署实例。"
+          }
+          lang={uiLang}
+          renderItem={(d) => {
+            const badge = effectiveStatusBadge(d);
+            const st = d.status.state;
+            const isRunning = st === "running";
+            const isTransitioning = st === "starting" || st === "loading";
+            const isBusyRow =
+              store.isBusy(`dep:${d.id}:start`) ||
+              store.isBusy(`dep:${d.id}:stop`) ||
+              store.isBusy(`dep:${d.id}:restart`) ||
+              store.isBusy(`dep:${d.id}:delete`) ||
+              store.isBusy(`dep:${d.id}:rollback`);
+            const sample = testResults[d.id];
 
-          return (
-            <div style={{ width: "100%" }}>
-              <div class="split-head">
-                <div>
-                  <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
-                    <strong>{d.id}</strong>
-                    {d.default ? (
-                      <Badge tone="neutral">{en ? "Default" : "默认"}</Badge>
-                    ) : null}
-                    <Badge tone={badge.tone}>{badge.text}</Badge>
-                  </div>
-                  <p class="hint" style={{ margin: "4px 0 0" }}>
-                    {[
-                      d.model || "—",
-                      formatBackend(locale, d.status.backend || d.backend),
-                      d.auto_start
-                        ? en
-                          ? "Auto-start"
-                          : "按需自启"
-                        : en
-                          ? "Manual start"
-                          : "手动启动",
-                      d.idle_minutes > 0
-                        ? en
-                          ? `Idle ${d.idle_minutes}m`
-                          : `空闲 ${d.idle_minutes} 分钟释放`
-                        : en
-                          ? "Keep warm"
-                          : "常驻不卸载",
-                      `${en ? "Requests" : "请求"}: ${d.status.requests ?? 0}`,
-                    ].join(" · ")}
-                  </p>
-                </div>
-
-                <div class="actions" style={{ marginTop: 0 }}>
-                  {!isRunning && !isTransitioning ? (
-                    <Button
-                      variant="primary"
-                      busy={store.isBusy(`dep:${d.id}:start`)}
-                      disabled={isBusyRow}
-                      onClick={() => void handleDeploymentRuntime(d, "start")}
-                    >
-                      {st === "cooldown"
-                        ? en
-                          ? "Retry now"
-                          : "立即重试"
-                        : en
-                          ? "Start"
-                          : "启动"}
-                    </Button>
-                  ) : null}
-                  {/* M-14: Stop button available during starting, loading, AND running! */}
-                  {isRunning || isTransitioning ? (
-                    <Button
-                      variant="danger"
-                      busy={store.isBusy(`dep:${d.id}:stop`)}
-                      onClick={() => void handleDeploymentRuntime(d, "stop")}
-                    >
-                      {isTransitioning
-                        ? en
-                          ? "Abort load"
-                          : "中止加载"
-                        : en
-                          ? "Stop"
-                          : "停止"}
-                    </Button>
-                  ) : null}
-                  {isRunning ? (
-                    <Button
-                      busy={store.isBusy(`dep:${d.id}:restart`)}
-                      disabled={isBusyRow}
-                      onClick={() => void handleDeploymentRuntime(d, "restart")}
-                    >
-                      {en ? "Restart" : "重启"}
-                    </Button>
-                  ) : null}
-                  <Button
-                    busy={store.isBusy(`dep:${d.id}:test`)}
-                    onClick={() => void handleTestDeployment(d)}
-                  >
-                    {en ? "Test" : "测试"}
-                  </Button>
-                  <Button
-                    onClick={() =>
-                      onNavigateHash(`#instances/${encodeURIComponent(d.id)}`)
-                    }
-                  >
-                    {en ? "Configure" : "配置"}
-                  </Button>
-                  {d.previous_model ? (
-                    <Button
-                      busy={store.isBusy(`dep:${d.id}:rollback`)}
-                      disabled={isRunning || isTransitioning || isBusyRow}
-                      title={
-                        isRunning || isTransitioning
-                          ? resolveError("stop_before_switch", uiLang).message
-                          : undefined
-                      }
-                      onClick={() => void handleRollbackDeployment(d)}
-                    >
-                      {en ? "Roll back model" : "切回上一模型"}
-                    </Button>
-                  ) : null}
-                  {!d.default ? (
-                    <Button
-                      variant="danger"
-                      busy={store.isBusy(`dep:${d.id}:delete`)}
-                      disabled={isRunning || isTransitioning || isBusyRow}
-                      title={
-                        isRunning || isTransitioning
-                          ? resolveError("stop_before_switch", uiLang).message
-                          : undefined
-                      }
-                      onClick={() => void handleDeleteDeployment(d)}
-                    >
-                      {en ? "Delete" : "移除"}
-                    </Button>
-                  ) : null}
-                </div>
-              </div>
-
-              {/* M-16: Current runtime error ALWAYS beats stale historical test sample! */}
-              {d.status.error ? (
-                <div
-                  class="feedback-banner"
-                  data-tone="error"
-                  style={{ marginTop: "10px", marginBottom: 0 }}
-                >
+            return (
+              <div style={{ width: "100%" }}>
+                <div class="split-head">
                   <div>
-                    <span>{resolveError(d.status.error, uiLang).message}</span>
-                    {d.backend !== "cpu" ? (
-                      <>
-                        {" "}
-                        <Button
-                          variant="ghost"
-                          busy={store.isBusy(`dep:${d.id}:fallback-cpu`)}
-                          onClick={() =>
-                            void handleDeploymentRuntime(d, "fallback-cpu")
-                          }
-                        >
-                          {en ? "Fallback to CPU" : "改用 CPU"}
-                        </Button>
-                      </>
-                    ) : null}
-                  </div>
-                  {d.status.last_failure?.log_tail || d.status.detail ? (
-                    <details>
-                      <summary>{en ? "Crash log tail" : "展开最后日志输出"}</summary>
-                      <pre>
-                        {d.status.last_failure?.log_tail || d.status.detail}
-                      </pre>
-                    </details>
-                  ) : null}
-                </div>
-              ) : sample ? (
-                <p class="hint" style={{ marginTop: "8px", color: "var(--accent)" }}>
-                  {en
-                    ? `✓ Verified (${sample.latencyMs} ms): "${sample.sample}"`
-                    : `✓ 推理测试通过（${sample.latencyMs} ms）：「${sample.sample}」`}
-                </p>
-              ) : null}
-
-              {/* M-03 & M-R3: Stable Disclosure per deployment card for Qingyi ID copy & live ring-buffer logs */}
-              <Disclosure
-                summary={
-                  en
-                    ? "Connection ID, WebUI & Engine Logs"
-                    : "展开调用标识、WebUI 入口与引擎运行日志"
-                }
-              >
-                <div style={{ marginTop: "10px", display: "grid", gap: "10px" }}>
-                  <CopyField
-                    label={
-                      en
-                        ? "Qingyi Local Model / Deployment ID"
-                        : "填入轻译「本地模型」字段的标识"
-                    }
-                    value={d.default ? d.model : d.id}
-                    lang={uiLang}
-                  />
-                  <div class="actions" style={{ marginTop: 0 }}>
-                    <Button
-                      busy={store.isBusy(`dep:${d.id}:logs`)}
-                      onClick={() => void handleLoadEngineLogs(d)}
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: "8px",
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                      }}
                     >
-                      {en ? "Refresh engine logs" : "读取引擎最近日志（64 KiB 环形缓冲）"}
-                    </Button>
+                      <strong>{d.id}</strong>
+                      {d.default ? (
+                        <Badge tone="neutral">{en ? "Default" : "默认"}</Badge>
+                      ) : null}
+                      <Badge tone={badge.tone}>{badge.text}</Badge>
+                    </div>
+                    <p class="hint" style={{ margin: "4px 0 0" }}>
+                      {[
+                        d.model || "—",
+                        formatBackend(locale, d.status.backend || d.backend),
+                        d.auto_start
+                          ? en
+                            ? "Auto-start"
+                            : "按需自启"
+                          : en
+                            ? "Manual"
+                            : "手动启动",
+                        d.idle_minutes > 0
+                          ? en
+                            ? `Idle ${d.idle_minutes}m`
+                            : `空闲 ${d.idle_minutes}m 释放`
+                          : en
+                            ? "Keep warm"
+                            : "常驻",
+                        `${en ? "Req" : "请求"}: ${d.status.requests ?? 0}`,
+                      ].join(" · ")}
+                    </p>
+                  </div>
+
+                  <div class="actions" style={{ margin: 0 }}>
+                    {!isRunning && !isTransitioning ? (
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        icon={<IconPlay size={12} />}
+                        busy={store.isBusy(`dep:${d.id}:start`)}
+                        disabled={isBusyRow}
+                        onClick={() => void handleDeploymentRuntime(d, "start")}
+                      >
+                        {st === "cooldown"
+                          ? en
+                            ? "Retry"
+                            : "重试"
+                          : en
+                            ? "Start"
+                            : "启动"}
+                      </Button>
+                    ) : null}
+                    {isRunning || isTransitioning ? (
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        icon={<IconSquare size={12} />}
+                        busy={store.isBusy(`dep:${d.id}:stop`)}
+                        onClick={() => void handleDeploymentRuntime(d, "stop")}
+                      >
+                        {isTransitioning
+                          ? en
+                            ? "Abort"
+                            : "中止"
+                          : en
+                            ? "Stop"
+                            : "停止"}
+                      </Button>
+                    ) : null}
                     {isRunning ? (
                       <Button
-                        variant="ghost"
-                        onClick={async () => {
-                          const target = d.default ? "" : d.id;
-                          if (isDesktopMode) {
-                            await nativeCommand("open-ui", target);
-                          } else {
-                            window.open(
-                              target ? `/ui?instance=${encodeURIComponent(target)}` : "/ui",
-                              "_blank",
-                              "noopener,noreferrer",
-                            );
-                          }
-                        }}
+                        size="sm"
+                        icon={<IconRefresh size={12} />}
+                        busy={store.isBusy(`dep:${d.id}:restart`)}
+                        disabled={isBusyRow}
+                        onClick={() =>
+                          void handleDeploymentRuntime(d, "restart")
+                        }
                       >
-                        {en ? "Open WebUI ↗" : "打开此实例 WebUI ↗"}
+                        {en ? "Restart" : "重启"}
+                      </Button>
+                    ) : null}
+                    <Button
+                      size="sm"
+                      busy={store.isBusy(`dep:${d.id}:test`)}
+                      onClick={() => void handleTestDeployment(d)}
+                    >
+                      {en ? "Test" : "测试"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={() =>
+                        onNavigateHash(
+                          `#instances/${encodeURIComponent(d.id)}`,
+                        )
+                      }
+                    >
+                      {en ? "Configure" : "配置"}
+                    </Button>
+                    {d.previous_model ? (
+                      <Button
+                        size="sm"
+                        busy={store.isBusy(`dep:${d.id}:rollback`)}
+                        disabled={isRunning || isTransitioning || isBusyRow}
+                        title={
+                          isRunning || isTransitioning
+                            ? resolveError("stop_before_switch", uiLang).message
+                            : undefined
+                        }
+                        onClick={() => void handleRollbackDeployment(d)}
+                      >
+                        {en ? "Roll back" : "切回上一模型"}
+                      </Button>
+                    ) : null}
+                    {!d.default ? (
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        icon={<IconTrash size={12} />}
+                        busy={store.isBusy(`dep:${d.id}:delete`)}
+                        disabled={isRunning || isTransitioning || isBusyRow}
+                        title={
+                          isRunning || isTransitioning
+                            ? resolveError("stop_before_switch", uiLang).message
+                            : undefined
+                        }
+                        onClick={() => void handleDeleteDeployment(d)}
+                      >
+                        {en ? "Delete" : "移除"}
                       </Button>
                     ) : null}
                   </div>
-                  {engineLogs[d.id] ? (
-                    <pre style={{ maxHeight: "220px", overflow: "auto", margin: 0 }}>
-                      {engineLogs[d.id]}
-                    </pre>
-                  ) : null}
                 </div>
-              </Disclosure>
-            </div>
-          );
-        }}
-      />
+
+                {d.status.error ? (
+                  <div
+                    class="feedback-banner"
+                    data-tone="error"
+                    style={{ marginTop: "10px", marginBottom: 0 }}
+                  >
+                    <div>
+                      <span>{resolveError(d.status.error, uiLang).message}</span>
+                      {d.backend !== "cpu" ? (
+                        <>
+                          {" "}
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            busy={store.isBusy(`dep:${d.id}:fallback-cpu`)}
+                            onClick={() =>
+                              void handleDeploymentRuntime(d, "fallback-cpu")
+                            }
+                          >
+                            {en ? "Use CPU" : "改用 CPU"}
+                          </Button>
+                        </>
+                      ) : null}
+                    </div>
+                    {d.status.last_failure?.log_tail || d.status.detail ? (
+                      <details style={{ marginTop: "6px" }}>
+                        <summary>
+                          <span>{en ? "Crash log tail" : "展开最后日志输出"}</span>
+                        </summary>
+                        <div class="ds-disclosure-body">
+                          <pre>
+                            {d.status.last_failure?.log_tail || d.status.detail}
+                          </pre>
+                        </div>
+                      </details>
+                    ) : null}
+                  </div>
+                ) : sample ? (
+                  <p
+                    class="hint"
+                    style={{ marginTop: "8px", color: "var(--color-accent)" }}
+                  >
+                    {en
+                      ? `✓ Verified (${sample.latencyMs} ms): "${sample.sample}"`
+                      : `✓ 推理测试通过（${sample.latencyMs} ms）：「${sample.sample}」`}
+                  </p>
+                ) : null}
+
+                <Disclosure
+                  summary={
+                    en
+                      ? "Connection ID, WebUI & Engine Logs"
+                      : "调用标识、WebUI 与引擎日志"
+                  }
+                >
+                  <div style={{ display: "grid", gap: "10px" }}>
+                    <CopyField
+                      label={
+                        en
+                          ? "Qingyi Local Model / Deployment ID"
+                          : "填入轻译「本地模型」的标识"
+                      }
+                      value={d.default ? d.model : d.id}
+                      lang={uiLang}
+                    />
+                    <div class="actions" style={{ margin: 0 }}>
+                      <Button
+                        size="sm"
+                        icon={<IconRefresh size={12} />}
+                        busy={store.isBusy(`dep:${d.id}:logs`)}
+                        onClick={() => void handleLoadEngineLogs(d)}
+                      >
+                        {en ? "Load Engine Logs" : "读取引擎日志"}
+                      </Button>
+                      {isRunning ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          icon={<IconExternalLink size={12} />}
+                          onClick={async () => {
+                            const target = d.default ? "" : d.id;
+                            if (isDesktopMode) {
+                              await nativeCommand("open-ui", target);
+                            } else {
+                              window.open(
+                                target
+                                  ? `/ui?instance=${encodeURIComponent(target)}`
+                                  : "/ui",
+                                "_blank",
+                                "noopener,noreferrer",
+                              );
+                            }
+                          }}
+                        >
+                          {en ? "Open WebUI" : "打开此实例 WebUI"}
+                        </Button>
+                      ) : null}
+                    </div>
+                    {engineLogs[d.id] ? (
+                      <pre
+                        style={{
+                          maxHeight: "220px",
+                          overflow: "auto",
+                          margin: 0,
+                        }}
+                      >
+                        {engineLogs[d.id]}
+                      </pre>
+                    ) : null}
+                  </div>
+                </Disclosure>
+              </div>
+            );
+          }}
+        />
+      </SettingGroup>
     </section>
   );
 }

@@ -27,6 +27,22 @@ type TargetLanguageRule struct {
 	PromptName  string `json:"promptName"`
 }
 
+type ParagraphRebuildRule struct {
+	ListMarkerPattern        string  `json:"listMarkerPattern"`
+	HeadingSectionPattern    string  `json:"headingSectionPattern"`
+	HeadingBlockedEndPattern string  `json:"headingBlockedEndPattern"`
+	HeadingMaxChars          int     `json:"headingMaxChars"`
+	HeadingMaxCjkChars       int     `json:"headingMaxCjkChars"`
+	HeadingShortChars        int     `json:"headingShortChars"`
+	HeadingShortCjkChars     int     `json:"headingShortCjkChars"`
+	HeadingMaxRatio          float64 `json:"headingMaxRatio"`
+	HyphenLineEndPattern     string  `json:"hyphenLineEndPattern"`
+	HyphenNextStartPattern   string  `json:"hyphenNextStartPattern"`
+	CodeFencePattern         string  `json:"codeFencePattern"`
+	CodeLinePattern          string  `json:"codeLinePattern"`
+	CjkCharPattern           string  `json:"cjkCharPattern"`
+}
+
 type TranslationRules struct {
 	Version                int    `json:"version"`
 	SingleTextModelPattern string `json:"singleTextModelPattern"`
@@ -42,6 +58,7 @@ type TranslationRules struct {
 		DefaultSingle string `json:"defaultSingle"`
 		DefaultBatch  string `json:"defaultBatch"`
 	} `json:"templates"`
+	ParagraphRebuild ParagraphRebuildRule `json:"paragraphRebuild"`
 }
 
 var (

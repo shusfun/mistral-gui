@@ -84,9 +84,15 @@ class Handler(BaseHTTPRequestHandler):
             if result:
                 for item in result:
                     if len(item) >= 3 and item[1]:
+                        box = []
+                        if item[0] and isinstance(item[0], (list, tuple)):
+                            for pt in item[0]:
+                                if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                                    box.append([float(pt[0]), float(pt[1])])
                         lines.append({
                             "text": str(item[1]).strip(),
                             "score": float(item[2]),
+                            "box": box,
                         })
             body = json.dumps({"lines": lines}, ensure_ascii=False).encode("utf-8")
             self.send_response(200)
@@ -108,8 +114,9 @@ if __name__ == "__main__":
 `
 
 type OCRLine struct {
-	Text  string  `json:"text"`
-	Score float64 `json:"score"`
+	Text  string       `json:"text"`
+	Score float64      `json:"score"`
+	Box   [][2]float64 `json:"box,omitempty"`
 }
 
 type ocrProcess struct {
@@ -274,9 +281,16 @@ func (o *OCRSupervisor) ensureWorker(ctx context.Context) (*ocrProcess, error) {
 		return p, nil
 	}
 	bin, args, installed := o.findInstalledBinaryLocked()
+	custom := o.customExecPath != ""
 	o.mu.Unlock()
 	if !installed {
 		return nil, errors.New("ocr_not_installed")
+	}
+	if !custom {
+		workerScript := filepath.Join(o.dir, "ocr_worker.py")
+		if cur, rErr := os.ReadFile(workerScript); rErr == nil && string(cur) != embeddedOCRWorkerPy {
+			_ = os.WriteFile(workerScript, []byte(embeddedOCRWorkerPy), 0600)
+		}
 	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

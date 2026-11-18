@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/shusfun/mistral-gui/internal/app"
+	"github.com/shusfun/mistral-gui/internal/branding"
 	"github.com/shusfun/mistral-gui/internal/desktop"
 	"github.com/shusfun/mistral-gui/internal/update"
 	"github.com/wailsapp/wails/v3/pkg/updater"
@@ -70,6 +71,9 @@ func main() {
 	a.AttachLock(dataLock)
 	logFile := a.EnableLogging()
 	defer logFile.Close()
+	if err := branding.Migrate(app.Version); err != nil {
+		slog.Warn("branding.migration", "error", err)
+	}
 	defer a.Close()
 	if *language != "" {
 		_ = a.SetLanguage(*language)

@@ -43,6 +43,9 @@ func (a *App) DesktopUpdate(trace string) Operation {
 func (a *App) UpdateProgress(id string, done, total int64, step string) {
 	a.changeOp(id, func(o *Operation) { o.Progress = done; o.Total = total; o.Step = step })
 }
+func (a *App) UpdatePhase(id, step, source string) {
+	a.changeOp(id, func(o *Operation) { o.Step = step; o.Source = source })
+}
 func (a *App) NativeTrace(kind, trace string) {
 	slog.Info("desktop.action", "traceId", traceRoot(trace), "action", kind)
 }

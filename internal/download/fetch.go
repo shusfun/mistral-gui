@@ -109,18 +109,21 @@ type Progress struct {
 // Request 描述一次下载。URLs 与 Sources 内容必须相同（都按 SHA256 校验），依次尝试；Sources 按 Before 插在 URLs 之间。
 // MinSpeed / SlowFor 为 0 时用默认的低速换源规则；MinSpeed < 0 关闭低速换源。
 type Request struct {
-	Headers    http.Header
-	URLs       []string
-	Sources    []Source
-	Dest       string
-	SHA256     string
-	GitSHA1    string
-	MaxSize    int64
-	Idle       time.Duration
-	MinSpeed   int64
-	SlowFor    time.Duration
-	HTTP       *http.Client // 不要设置整体 Timeout；超时由 Idle 控制
-	OnProgress func(Progress)
+	// KeepSourceOrder keeps an explicit official-first policy instead of applying the source cooldown.
+	KeepSourceOrder bool
+	OnSourceResult  func(source string, elapsed time.Duration, err error)
+	Headers         http.Header
+	URLs            []string
+	Sources         []Source
+	Dest            string
+	SHA256          string
+	GitSHA1         string
+	MaxSize         int64
+	Idle            time.Duration
+	MinSpeed        int64
+	SlowFor         time.Duration
+	HTTP            *http.Client // 不要设置整体 Timeout；超时由 Idle 控制
+	OnProgress      func(Progress)
 	// OnStep 报告当前阶段（连接某来源、换来源、校验摘要；空字符串表示连上了、开始传输）；旧进度在阶段切换后不再有效。
 	OnStep func(string)
 	Log    func(string)
@@ -203,7 +206,10 @@ func Download(ctx context.Context, r Request) error {
 	if err := os.MkdirAll(filepath.Dir(r.Dest), 0o755); err != nil {
 		return err
 	}
-	steps := orderStepsSkippingBadSources(r.steps())
+	steps := r.steps()
+	if !r.KeepSourceOrder {
+		steps = orderStepsSkippingBadSources(steps)
+	}
 	n := len(steps)
 	if n == 0 {
 		return errors.New("download_source_missing")
@@ -299,6 +305,9 @@ func Download(ctx context.Context, r Request) error {
 				if err = os.Rename(r.Dest+".part", r.Dest); err != nil {
 					return err
 				}
+				if r.OnSourceResult != nil {
+					r.OnSourceResult(host, time.Since(started), nil)
+				}
 				r.Log("下载完成，摘要校验通过")
 				return nil
 			}
@@ -307,6 +316,9 @@ func Download(ctx context.Context, r Request) error {
 				markBadSource(st.url)
 			}
 			err = fmt.Errorf("digest_mismatch: %s: %w", host, ErrDigest)
+		}
+		if r.OnSourceResult != nil {
+			r.OnSourceResult(host, time.Since(started), err)
 		}
 		if ctx.Err() != nil {
 			r.Log("已取消，保留已下载的部分")

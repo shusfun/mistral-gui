@@ -20,6 +20,8 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 ditto "$MOUNT/mistral-gui.app" "$APP"
 codesign --verify --deep --strict "$APP"
+test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleDisplayName' "$APP/Contents/Info.plist")" = mistral
+test -s "$APP/Contents/Resources/app.icns"
 PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')
 ADDRESS="127.0.0.1:$PORT"
 TRACE=$(python3 -c 'import uuid;print("00-"+uuid.uuid4().hex+"-"+uuid.uuid4().hex[:16]+"-01")')

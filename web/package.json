@@ -1,6 +1,6 @@
 {
   "name": "mistral-gui-web",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,7 +8,7 @@
     "build": "vite build"
   },
   "dependencies": {
-    "preact": "^10.25.0"
+    "preact": "11.2.0"
   },
   "devDependencies": {
     "typescript": "^5.9.0",

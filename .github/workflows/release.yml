@@ -55,12 +55,17 @@ jobs:
         shell: bash
         run: |
           [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$VERSION" = "v$(node -p "require('./web/package.json').version")"
           test -n "$UPDATE_PUBLIC_KEY"
       - name: Test and vet
         shell: bash
         run: |
           go test ./...
           go vet ./...
+      - name: Embed Windows application icon and version
+        if: matrix.goos == 'windows'
+        shell: bash
+        run: go run github.com/tc-hib/go-winres@v0.3.3 make --in installer/windows/winres.json --out cmd/mistral-gui/rsrc --arch amd64 --file-version "${VERSION#v}" --product-version "${VERSION#v}"
       - name: Build manager and updater
         shell: bash
         env:
@@ -84,7 +89,7 @@ jobs:
         if: matrix.goos == 'windows'
         shell: pwsh
         run: |
-          & 'C:\Program Files (x86)\NSIS\makensis.exe' "/DVERSION=$($env:VERSION.TrimStart('v'))" installer/windows/setup.nsi
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' /INPUTCHARSET UTF8 "/DVERSION=$($env:VERSION.TrimStart('v'))" installer/windows/setup.nsi
           if ($LASTEXITCODE) { throw 'NSIS failed' }
       - name: Windows installed application smoke
         if: matrix.goos == 'windows'
@@ -136,8 +141,27 @@ jobs:
             dist/*.update.zip
             dist/*.update.tar.zst
             dist/*.update.tar.gz
-  metadata:
+  upgrade:
     needs: manager
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        previous: [v0.2.1, v0.3.0]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: manager-windows-amd64
+          path: dist
+      - name: Check upgrade and branding
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS_VERSION: ${{ matrix.previous }}
+        run: ./installer/windows/upgrade-smoke.ps1 -PreviousVersion $env:PREVIOUS_VERSION
+  metadata:
+    needs: [manager, upgrade]
     runs-on: windows-latest
     permissions:
       contents: write

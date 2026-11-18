@@ -30,7 +30,7 @@ const DICT = {
     closeWindow: "隐藏到托盘",
     chooseLangTitle: "选择界面语言 / Choose Interface Language",
     chooseLangDesc: "随时可在「更新与设置」中切换界面语言。",
-    loginTitle: "连接到本机 mistral-gui",
+    loginTitle: "连接到本机 mistral",
     loginHint:
       "请从系统托盘打开（自动一次性免密登录），或粘贴本机管理器的访问 Token。",
     tokenLabel: "访问 Token",
@@ -52,12 +52,14 @@ const DICT = {
 
     // Operation Steps (M-12)
     step_checking: "正在检查元数据",
+    step_switching_source: "正在切换更新来源",
+    step_retrying: "正在重试连接",
     step_downloading: "正在下载",
     step_verifying: "正在校验完整性",
     step_extracting: "正在安全解压",
     step_importing: "正在导入模型文件",
     step_starting: "正在启动推理引擎",
-    step_update_ready: "更新包校验就绪，正在切换重启",
+    step_update_ready: "更新包已校验，等待确认重启",
     step_preparing: "正在准备运行时与模型",
 
     // Runtime Loading Stages (M-R1)
@@ -110,7 +112,7 @@ const DICT = {
     closeWindow: "Hide to system tray",
     chooseLangTitle: "Choose Interface Language / 选择界面语言",
     chooseLangDesc: "You can switch the interface language anytime in Updates & Settings.",
-    loginTitle: "Connect to Local mistral-gui",
+    loginTitle: "Connect to Local mistral",
     loginHint:
       "Open from the system tray for automatic sign-in, or paste your local manager access token.",
     tokenLabel: "Access Token",
@@ -130,12 +132,14 @@ const DICT = {
     state_interrupted: "Interrupted",
 
     step_checking: "Checking metadata",
+    step_switching_source: "Switching update source",
+    step_retrying: "Retrying connection",
     step_downloading: "Downloading",
     step_verifying: "Verifying digest",
     step_extracting: "Extracting archive",
     step_importing: "Importing model files",
     step_starting: "Starting engine",
-    step_update_ready: "Update verified & restarting",
+    step_update_ready: "Update verified, awaiting restart confirmation",
     step_preparing: "Preparing runtime & weights",
 
     stage_starting_process: "Spawning engine process",

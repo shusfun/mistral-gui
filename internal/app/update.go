@@ -29,30 +29,40 @@ func (a *App) setUpdating(v bool) {
 }
 
 func (a *App) manifest(ctx context.Context) (update.Manifest, error) {
+	return a.UpdateManifest(ctx)
+}
+
+// UpdateManifest is shared by native and HTTP update entry points.
+func (a *App) UpdateManifest(ctx context.Context) (update.Manifest, error) {
 	if UpdateRepository == "" {
 		return update.Manifest{}, fmt.Errorf("update_repository_unconfigured")
 	}
-	m, err := update.FetchSigned(ctx, &http.Client{Timeout: 30 * time.Second}, "https://github.com/"+UpdateRepository+"/releases/latest/download/release-manifest.json", UpdatePublicKey)
+	m, err := update.FetchSignedSources(ctx, nil, "https://github.com/"+UpdateRepository+"/releases/latest/download/release-manifest.json", UpdatePublicKey, a.Mirrors())
 	if err != nil {
 		return m, err
 	}
 	// Anti-replay watermark: reject signed manifests older than any version already observed (M-S21).
 	a.mu.Lock()
 	highest := a.config.HighestSeenVersion
-	a.mu.Unlock()
 	if highest != "" && update.IsNewer(m.Version, highest) {
+		a.mu.Unlock()
 		return update.Manifest{}, fmt.Errorf("manifest_replay_rejected")
 	}
-	if highest == "" || update.IsNewer(highest, m.Version) {
-		a.mu.Lock()
+	changed := highest == "" || update.IsNewer(highest, m.Version)
+	if changed {
 		a.config.HighestSeenVersion = m.Version
-		a.mu.Unlock()
-		_ = a.save()
+	}
+	a.mu.Unlock()
+	if changed {
+		if err := a.save(); err != nil {
+			return update.Manifest{}, err
+		}
 	}
 	return m, nil
 }
 
 func (a *App) updateCheck(w http.ResponseWriter, r *http.Request) {
+	r = r.WithContext(update.WithTrace(r.Context(), r.Header.Get("traceparent"), nil))
 	a.mu.Lock()
 	desktop := a.desktop
 	a.mu.Unlock()
@@ -125,6 +135,7 @@ func (a *App) updateInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	op := a.operation("update", r.Header.Get("traceparent"), func(ctx context.Context, id string) error {
+		ctx = update.WithTrace(ctx, a.operationTrace(id), func(step, source string) { a.UpdatePhase(id, step, source) })
 		m, e := a.manifest(ctx)
 		if e != nil {
 			return e

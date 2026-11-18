@@ -14,10 +14,12 @@ import (
 )
 
 type TranslateSegmentResult struct {
-	Source      string `json:"source"`
-	Translation string `json:"translation,omitempty"`
-	Channel     string `json:"channel,omitempty"`
-	Error       string `json:"error,omitempty"`
+	Source      string      `json:"source"`
+	RawSource   string      `json:"raw_source,omitempty"`
+	Box         *[4]float64 `json:"box,omitempty"`
+	Translation string      `json:"translation,omitempty"`
+	Channel     string      `json:"channel,omitempty"`
+	Error       string      `json:"error,omitempty"`
 }
 
 type TranslateRequest struct {
@@ -27,25 +29,25 @@ type TranslateRequest struct {
 	TargetLang        string `json:"target_lang"`
 	Routing           string `json:"routing"`
 	Model             string `json:"model"`
+	PreserveLines     bool   `json:"preserve_lines"`
 	ConfirmCloudImage bool   `json:"confirm_cloud_image"`
 }
 
 type TranslateResponse struct {
 	Segments       []TranslateSegmentResult `json:"segments"`
 	OCRText        string                   `json:"ocr_text,omitempty"`
+	OCRRawText     string                   `json:"ocr_raw_text,omitempty"`
 	OCRMs          int64                    `json:"ocr_ms,omitempty"`
 	FallbackReason string                   `json:"fallback_reason,omitempty"`
 	ModelUsed      string                   `json:"model_used,omitempty"`
 }
 
 func splitDesktopParagraphs(text string) []string {
-	norm := strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
-	rawParts := strings.Split(norm, "\n")
-	out := make([]string, 0, len(rawParts))
-	for _, p := range rawParts {
-		t := strings.TrimSpace(p)
-		if t != "" {
-			out = append(out, t)
+	rebuilt := RebuildParagraphs(text, false)
+	out := make([]string, 0, len(rebuilt))
+	for _, p := range rebuilt {
+		if p.Merged != "" {
+			out = append(out, p.Merged)
 		}
 	}
 	return out
@@ -240,7 +242,10 @@ func (a *App) translateDesktop(w http.ResponseWriter, r *http.Request) {
 
 	inputText := strings.TrimSpace(req.Text)
 	var ocrText string
+	var ocrRawText string
 	var ocrMs int64
+	var builtParagraphs []OCRParagraph
+	rawLineCount := 0
 
 	if strings.TrimSpace(req.ImageBase64) != "" {
 		rawB64 := strings.TrimSpace(req.ImageBase64)
@@ -268,44 +273,98 @@ func (a *App) translateDesktop(w http.ResponseWriter, r *http.Request) {
 			fail(w, 503, err.Error())
 			return
 		}
-		parts := make([]string, 0, len(lines))
-		for _, ln := range lines {
-			if strings.TrimSpace(ln.Text) != "" {
-				parts = append(parts, strings.TrimSpace(ln.Text))
-			}
-		}
-		ocrText = strings.Join(parts, "\n")
+		imgW, imgH := decodeImageDimensions(imgBytes)
+		ocrParas, mergedTxt, rawTxt, lineCnt := SegmentOCRLines(lines, imgW, imgH, req.PreserveLines)
+		ocrText = mergedTxt
+		ocrRawText = rawTxt
 		ocrMs = elapsed
 		if ocrText == "" && inputText == "" {
 			fail(w, 422, "ocr_empty_text")
 			return
 		}
 		if inputText == "" {
-			inputText = ocrText
+			builtParagraphs = ocrParas
+			rawLineCount = lineCnt
 		}
 	}
 
-	paragraphs := splitDesktopParagraphs(inputText)
-	if len(paragraphs) == 0 {
+	if len(builtParagraphs) == 0 && inputText != "" {
+		norm := strings.ReplaceAll(strings.ReplaceAll(inputText, "\r\n", "\n"), "\r", "\n")
+		for _, ln := range strings.Split(norm, "\n") {
+			if strings.TrimSpace(ln) != "" {
+				rawLineCount++
+			}
+		}
+		rebuilt := RebuildParagraphs(inputText, req.PreserveLines)
+		builtParagraphs = make([]OCRParagraph, 0, len(rebuilt))
+		for _, rp := range rebuilt {
+			if rp.Merged != "" {
+				builtParagraphs = append(builtParagraphs, OCRParagraph{
+					Merged: rp.Merged,
+					Raw:    rp.Raw,
+				})
+			}
+		}
+	}
+
+	traceID := ""
+	if validTraceparent(trace) {
+		traceID = trace[3:35]
+	}
+	slog.Info(
+		"translation.stage",
+		"traceId", traceID,
+		"phase", "paragraph.rebuild",
+		"outcome", "success",
+		"rawLines", rawLineCount,
+		"rebuiltParagraphs", len(builtParagraphs),
+		"preserveLines", req.PreserveLines,
+		"durationMs", time.Since(started).Milliseconds(),
+		"code.file.path", "internal/app/translate.go",
+		"code.function.name", "translateDesktop",
+	)
+
+	if len(builtParagraphs) == 0 {
 		writeJSON(w, 200, TranslateResponse{
-			Segments: []TranslateSegmentResult{},
-			OCRText:  ocrText,
-			OCRMs:    ocrMs,
+			Segments:   []TranslateSegmentResult{},
+			OCRText:    ocrText,
+			OCRRawText: ocrRawText,
+			OCRMs:      ocrMs,
 		})
 		return
 	}
-	if len(paragraphs) > 128 {
+	if len(builtParagraphs) > 128 {
+		logStage("translate.end", "input_limit", -1)
+		fail(w, 400, "translation_input_limit")
+		return
+	}
+	totalRunes := 0
+	for _, bp := range builtParagraphs {
+		segRunes := len([]rune(bp.Merged))
+		if segRunes > 8000 {
+			logStage("translate.end", "input_limit", -1)
+			fail(w, 400, "translation_input_limit")
+			return
+		}
+		totalRunes += segRunes
+	}
+	if totalRunes > 32000 {
 		logStage("translate.end", "input_limit", -1)
 		fail(w, 400, "translation_input_limit")
 		return
 	}
 
 	dict := root.ensureDictionaryStore()
-	results := make([]TranslateSegmentResult, len(paragraphs))
+	results := make([]TranslateSegmentResult, len(builtParagraphs))
 	var fallbackReason string
 	var modelUsed string
 
-	for i, seg := range paragraphs {
+	for i, item := range builtParagraphs {
+		seg := item.Merged
+		rawSrc := item.Raw
+		if rawSrc == "" {
+			rawSrc = seg
+		}
 		if r.Context().Err() != nil {
 			logStage("translate.end", "cancelled", i)
 			return
@@ -315,6 +374,8 @@ func (a *App) translateDesktop(w http.ResponseWriter, r *http.Request) {
 			logStage("dictionary.lookup", ch, i)
 			results[i] = TranslateSegmentResult{
 				Source:      seg,
+				RawSource:   rawSrc,
+				Box:         item.Box,
 				Translation: tr,
 				Channel:     ch,
 			}
@@ -327,24 +388,24 @@ func (a *App) translateDesktop(w http.ResponseWriter, r *http.Request) {
 			// Strict local-only guarantee: NEVER touches CloudAPIURL under any condition.
 			tr, mUsed, err := root.translateLocalSegment(r.Context(), req.Model, seg, tgtLang, trace)
 			if err != nil {
-				results[i] = TranslateSegmentResult{Source: seg, Error: err.Error()}
+				results[i] = TranslateSegmentResult{Source: seg, RawSource: rawSrc, Box: item.Box, Error: err.Error()}
 			} else {
 				modelUsed = mUsed
-				results[i] = TranslateSegmentResult{Source: seg, Translation: tr, Channel: "local"}
+				results[i] = TranslateSegmentResult{Source: seg, RawSource: rawSrc, Box: item.Box, Translation: tr, Channel: "local"}
 			}
 		case "cloud-only":
 			tr, err := root.translateCloudSegment(r.Context(), cfg.CloudAPIURL, cfg.CloudAPIKey, cfg.CloudModel, seg, tgtLang, trace)
 			if err != nil {
-				results[i] = TranslateSegmentResult{Source: seg, Error: err.Error()}
+				results[i] = TranslateSegmentResult{Source: seg, RawSource: rawSrc, Box: item.Box, Error: err.Error()}
 			} else {
 				modelUsed = cfg.CloudModel
-				results[i] = TranslateSegmentResult{Source: seg, Translation: tr, Channel: "cloud"}
+				results[i] = TranslateSegmentResult{Source: seg, RawSource: rawSrc, Box: item.Box, Translation: tr, Channel: "cloud"}
 			}
 		default: // local-first
 			tr, mUsed, localErr := root.translateLocalSegment(r.Context(), req.Model, seg, tgtLang, trace)
 			if localErr == nil {
 				modelUsed = mUsed
-				results[i] = TranslateSegmentResult{Source: seg, Translation: tr, Channel: "local"}
+				results[i] = TranslateSegmentResult{Source: seg, RawSource: rawSrc, Box: item.Box, Translation: tr, Channel: "local"}
 				continue
 			}
 			if fallbackReason == "" {
@@ -352,10 +413,10 @@ func (a *App) translateDesktop(w http.ResponseWriter, r *http.Request) {
 			}
 			cTr, cloudErr := root.translateCloudSegment(r.Context(), cfg.CloudAPIURL, cfg.CloudAPIKey, cfg.CloudModel, seg, tgtLang, trace)
 			if cloudErr != nil {
-				results[i] = TranslateSegmentResult{Source: seg, Error: cloudErr.Error()}
+				results[i] = TranslateSegmentResult{Source: seg, RawSource: rawSrc, Box: item.Box, Error: cloudErr.Error()}
 			} else {
 				modelUsed = cfg.CloudModel
-				results[i] = TranslateSegmentResult{Source: seg, Translation: cTr, Channel: "cloud"}
+				results[i] = TranslateSegmentResult{Source: seg, RawSource: rawSrc, Box: item.Box, Translation: cTr, Channel: "cloud"}
 			}
 		}
 		outcome := results[i].Channel
@@ -384,6 +445,7 @@ func (a *App) translateDesktop(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, TranslateResponse{
 		Segments:       results,
 		OCRText:        ocrText,
+		OCRRawText:     ocrRawText,
 		OCRMs:          ocrMs,
 		FallbackReason: fallbackReason,
 		ModelUsed:      modelUsed,

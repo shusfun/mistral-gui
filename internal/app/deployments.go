@@ -38,6 +38,7 @@ type Deployment struct {
 }
 type DeploymentView struct {
 	Deployment
+	Default     bool   `json:"default"`
 	Status      State  `json:"status"`
 	Revision    string `json:"model_revision"`
 	Fingerprint string `json:"deployment_revision"`
@@ -122,7 +123,7 @@ func (a *App) deploymentViews() []DeploymentView {
 		}
 		b, _ := json.Marshal([]any{revision, d.Backend, d.Tuning})
 		sum := sha256.Sum256(b)
-		result = append(result, DeploymentView{Deployment: d, Status: s, Revision: revision, Fingerprint: hex.EncodeToString(sum[:]), Path: path, ModelName: name})
+		result = append(result, DeploymentView{Deployment: d, Default: child == a, Status: s, Revision: revision, Fingerprint: hex.EncodeToString(sum[:]), Path: path, ModelName: name})
 	}
 	sort.SliceStable(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result

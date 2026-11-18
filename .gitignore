@@ -8,3 +8,4 @@
 *.p12
 *.key
 .DS_Store
+cmd/mistral-gui/rsrc_windows_*.syso

@@ -75,6 +75,18 @@ if (typeof window !== "undefined") {
 }
 
 let onAuthRequiredCallback: (() => void) | null = null;
+export async function traceUiSave(action: (trace: string) => Promise<void>) {
+  const trace = newTrace();
+  const started = performance.now();
+  recordUiTrace(trace, "ui.start", "started");
+  try {
+    await action(trace);
+    recordUiTrace(trace, "ui.end", "success", performance.now() - started);
+  } catch (error) {
+    recordUiTrace(trace, "ui.end", "failed", performance.now() - started);
+    throw error;
+  }
+}
 export function onAuthRequired(cb: () => void) {
   onAuthRequiredCallback = cb;
 }

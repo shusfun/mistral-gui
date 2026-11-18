@@ -39,7 +39,7 @@ export interface Tuning {
   context?: number;
   sequences?: number;
   gpu_layers?: number;
-  gpu_utilization?: number;
+  gpu_memory_utilization?: number;
   kv_cache?: string;
   isq?: string;
   batch_tokens?: number;
@@ -221,12 +221,14 @@ export interface RecommendationResponse {
 }
 
 export interface CapabilitiesResponse {
-  backend: string;
-  tuning: Record<string, boolean>;
+  engine: string;
+  features: Partial<Record<keyof Tuning, boolean>>;
 }
 
 export interface TranslateSegment {
   source: string;
+  raw_source?: string;
+  box?: [number, number, number, number];
   translation?: string;
   channel?: string;
   error?: string;
@@ -235,6 +237,7 @@ export interface TranslateSegment {
 export interface DesktopTranslateResponse {
   segments: TranslateSegment[];
   ocr_text?: string;
+  ocr_raw_text?: string;
   ocr_ms?: number;
   fallback_reason?: string;
   model_used?: string;

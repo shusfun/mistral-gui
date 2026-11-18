@@ -162,18 +162,19 @@ func manifest(dir, version, repo string) error {
 			}
 		}
 	}
-	for _, name := range []string{"mistral-gui-windows-x64.wails.update.zip", "mistral-gui-macos-x64.update.tar.gz", "mistral-gui-macos-arm64.update.tar.gz"} {
+	for i, name := range []string{"mistral-gui-windows-x64.wails.update.zip", "mistral-gui-macos-x64.update.tar.gz", "mistral-gui-macos-arm64.update.tar.gz"} {
 		f, e := os.Open(filepath.Join(dir, name))
 		if e != nil {
 			return e
 		}
 		h := sha256.New()
-		_, e = io.Copy(h, f)
+		n, copyErr := io.Copy(h, f)
 		f.Close()
-		if e != nil {
-			return e
+		if copyErr != nil {
+			return copyErr
 		}
 		digest := h.Sum(nil)
+		m.Assets = append(m.Assets, update.Asset{OS: targets[i].os, Arch: targets[i].arch, Kind: "wails-update", URL: "https://github.com/" + repo + "/releases/download/" + version + "/" + name, SHA256: hex.EncodeToString(digest), Size: n})
 		sums = append(sums, hex.EncodeToString(digest)+"  "+name)
 		sig := base64.StdEncoding.EncodeToString(ed25519.Sign(key, digest)) + "\n"
 		if e = os.WriteFile(filepath.Join(dir, name+".sig"), []byte(sig), 0644); e != nil {

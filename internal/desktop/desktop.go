@@ -17,9 +17,10 @@ import (
 	"time"
 
 	"github.com/shusfun/mistral-gui/internal/app"
+	"github.com/shusfun/mistral-gui/internal/branding"
+	"github.com/shusfun/mistral-gui/internal/update"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
-	"github.com/wailsapp/wails/v3/pkg/icons"
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 	"github.com/wailsapp/wails/v3/pkg/updater"
 )
@@ -158,16 +159,16 @@ func (s *Service) Command(kind, value, trace string) (any, error) {
 }
 func Run(manager *app.App, hidden bool) error {
 	s := &Service{manager: manager, notifier: notifications.New(), notified: map[string]bool{}, confirmations: map[string]chan bool{}}
-	s.host = application.New(application.Options{Name: "mistral-gui", Description: "Local model manager", Services: []application.Service{application.NewService(s), application.NewService(s.notifier)}, Assets: application.AssetOptions{Handler: manager.DesktopHandler()}, Mac: application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: false}, OnShutdown: manager.Close})
-	s.window = s.host.Window.NewWithOptions(application.WebviewWindowOptions{Title: "mistral-gui", Width: 1121, Height: 821, MinWidth: 861, MinHeight: 621, Frameless: runtime.GOOS != "darwin", Windows: application.WindowsWindow{NonClientRegionSupport: true, WebView2CompositionHosting: true}, Mac: application.MacWindow{TitleBar: application.MacTitleBarHidden, InvisibleTitleBarHeight: 47}, URL: "/manage?desktop=1", Hidden: hidden})
+	s.host = application.New(application.Options{Name: "mistral", Icon: branding.Logo, Description: "Local model manager", Services: []application.Service{application.NewService(s), application.NewService(s.notifier)}, Assets: application.AssetOptions{Handler: manager.DesktopHandler()}, Mac: application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: false}, OnShutdown: manager.Close})
+	s.window = s.host.Window.NewWithOptions(application.WebviewWindowOptions{Title: "mistral", Width: 1121, Height: 821, MinWidth: 861, MinHeight: 621, Frameless: runtime.GOOS != "darwin", Windows: application.WindowsWindow{NonClientRegionSupport: true, WebView2CompositionHosting: true}, Mac: application.MacWindow{TitleBar: application.MacTitleBarHidden, InvisibleTitleBarHeight: 47}, URL: "/manage?desktop=1", Hidden: hidden})
 	s.window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) { s.window.Hide(); e.Cancel() })
 	s.host.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(e *application.ApplicationEvent) { s.Show() })
 	tray := s.host.SystemTray.New()
-	tray.SetTooltip("mistral-gui")
+	tray.SetTooltip("mistral")
 	if runtime.GOOS == "darwin" {
-		tray.SetTemplateIcon(icons.SystrayMacTemplate)
+		tray.SetTemplateIcon(branding.TrayTemplate)
 	} else {
-		tray.SetIcon(icons.SystrayLight)
+		tray.SetIcon(branding.TrayDark).SetDarkModeIcon(branding.TrayLight)
 	}
 	triggerScreenshot := func() {
 		shot, err := s.captureAndStore(true)
@@ -253,11 +254,19 @@ func Run(manager *app.App, hidden bool) error {
 	return s.host.Run()
 }
 func (s *Service) CheckUpdate(ctx context.Context) (any, error) {
+	if update.Trace(ctx) == "" {
+		ctx = update.WithTrace(ctx, "", nil)
+	}
 	if app.UpdateRepository == "" || app.UpdatePublicKey == "" {
 		return nil, errors.New("update_repository_unconfigured")
 	}
 	r, e := s.host.Updater.Check(ctx)
 	if e != nil {
+		for _, code := range []string{"update_sources_failed", "update_requires_installer", "update_asset_missing", "update_asset_invalid", "manifest_replay_rejected"} {
+			if strings.Contains(e.Error(), code) {
+				return nil, errors.New(code)
+			}
+		}
 		return nil, e
 	}
 	if r == nil {
@@ -277,7 +286,7 @@ func cleanupWailsStagingDirs() {
 }
 
 func (s *Service) InstallUpdate(ctx context.Context, trace, id string) error {
-	ctx = withDownloadTrace(ctx, trace)
+	ctx = update.WithTrace(ctx, trace, func(step, source string) { s.manager.UpdatePhase(id, step, source) })
 	s.mu.Lock()
 	if s.updating {
 		s.mu.Unlock()
@@ -349,7 +358,7 @@ func (s *Service) notifyTask(id string) (bool, error) {
 		body = s.text("任务失败，请返回管理器查看原因。", "Task failed. Open the manager for details.")
 	}
 	s.notified[id] = true
-	err = s.notifier.SendNotification(notifications.NotificationOptions{ID: op.ID, Title: "mistral-gui", Body: body})
+	err = s.notifier.SendNotification(notifications.NotificationOptions{ID: op.ID, Title: "mistral", Body: body})
 	if err == nil {
 		s.manager.NativeTrace("notification.native", op.TraceID)
 		s.notified[id] = true

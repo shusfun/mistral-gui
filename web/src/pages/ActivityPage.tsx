@@ -3,18 +3,21 @@ import {
   Button,
   DataList,
   FeedbackBanner,
-  VerdictHero,
+  IconRefresh,
+  IconSquare,
+  SettingGroup,
   formatBytes,
   resolveError,
   runTracked,
   toast,
   useFeedbackStore,
 } from "../shared/design-system";
-import { api } from "../api";
+import { api, isDesktopMode, nativeCommand } from "../api";
 import {
   formatOpKind,
   formatRuntimeState,
   formatStep,
+  t,
   toUiLang,
   type ManagerLocale,
 } from "../i18n";
@@ -34,7 +37,8 @@ export function ActivityPage({
   const en = uiLang === "en";
 
   const sorted = [...operations].sort(
-    (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+    (a, b) =>
+      new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
   );
   const runningCount = sorted.filter((o) => o.state === "running").length;
 
@@ -48,7 +52,7 @@ export function ActivityPage({
       },
     );
 
-  // M-29 & M-30: Per-task busy guard + full repository & prepare parameters on Retry!
+  // M-29 & M-30: Per-task busy guard + full repository & prepare parameters on Retry
   const handleRetryOp = (op: OperationItem) =>
     runTracked(
       { key: `op:retry:${op.id}`, scope: "activity", lang: uiLang },
@@ -69,14 +73,15 @@ export function ActivityPage({
             repository: op.repository || "",
           });
         } else if (op.kind === "update") {
-          await api("/api/v1/update/install", {});
+          if (isDesktopMode) await nativeCommand("update");
+          else await api("/api/v1/update/install", {});
         }
         await onRefresh();
         toast(en ? "Retrying task…" : "已重新发起任务…", "info");
       },
     );
 
-  // M-10 & M-28: Format file-count progress vs byte progress cleanly, and use indeterminate progress bar without "Unknown" when total == 0!
+  // M-10 & M-28: Format file-count progress vs byte progress cleanly
   const formatOpProgressText = (op: OperationItem): string => {
     const stepText = formatStep(locale, op.step);
     const isFileCount = op.kind === "import" || op.step === "importing";
@@ -106,149 +111,168 @@ export function ActivityPage({
 
   return (
     <section class="panel mg-section">
-      <VerdictHero
-        eyebrow={en ? "BACKGROUND TASK HISTORY" : "后台下载与准备任务"}
-        title={
-          runningCount > 0
-            ? en
-              ? `${runningCount} active background task(s)`
-              : `当前有 ${runningCount} 项后台任务正在运行`
-            : en
-              ? `${sorted.length} recorded task(s)`
-              : `共记录 ${sorted.length} 项后台任务`
-        }
-        description={
-          en
-            ? "Interrupted downloads preserve verified .part files and resume automatically when retried."
-            : "网络中断或取消的下载会保留已完成分片（.part），点击「重试」可直接断点续传。"
-        }
-        badge={
+      <div class="mg-page-head">
+        <div class="mg-page-title-group">
+          <h1 class="mg-page-title">{t(locale, "navActivity")}</h1>
           <Badge tone={runningCount > 0 ? "info" : "neutral"}>
             {runningCount > 0
               ? en
-                ? "Active"
-                : "运行中"
+                ? `${runningCount} Running`
+                : `${runningCount} 项运行中`
               : en
-                ? "Idle"
-                : "空闲"}
+                ? `${sorted.length} Total`
+                : `共 ${sorted.length} 条`}
           </Badge>
-        }
-      />
+        </div>
+        <Button
+          size="sm"
+          icon={<IconRefresh size={13} />}
+          onClick={() => void onRefresh()}
+        >
+          {en ? "Refresh" : "刷新"}
+        </Button>
+      </div>
 
       <FeedbackBanner scope="activity" lang={uiLang} />
 
-      <DataList
-        items={sorted}
-        getKey={(op) => op.id}
-        emptyMessage={
-          en ? "No background tasks yet." : "暂无后台下载、导入或更新记录。"
+      <SettingGroup
+        description={
+          en
+            ? "Interrupted downloads keep verified .part chunks and resume automatically on retry."
+            : "中断或取消的下载会保留已完成分片（.part），点击重试即可断点续传。"
         }
-        lang={uiLang}
-        renderItem={(op) => {
-          // M-09: Concise badge ("已取消" / "已完成" / "失败"), never stuffing full sentence into badge!
-          const badgeTone =
-            op.state === "running"
-              ? "info"
-              : op.state === "success"
-                ? "success"
-                : op.state === "failed"
-                  ? "error"
-                  : "neutral";
-          const badgeText = formatRuntimeState(locale, op.state);
-          const progressLabel = formatOpProgressText(op);
-          const pct =
-            op.total > 0
-              ? Math.min(100, Math.max(2, Math.round((op.progress / op.total) * 100)))
-              : 0;
+        padded
+      >
+        <DataList
+          items={sorted}
+          getKey={(op) => op.id}
+          emptyMessage={
+            en ? "No background tasks yet." : "暂无后台下载、导入或更新记录。"
+          }
+          lang={uiLang}
+          renderItem={(op) => {
+            const badgeTone =
+              op.state === "running"
+                ? "info"
+                : op.state === "success"
+                  ? "success"
+                  : op.state === "failed"
+                    ? "error"
+                    : "neutral";
+            const badgeText = formatRuntimeState(locale, op.state);
+            const progressLabel = formatOpProgressText(op);
+            const pct =
+              op.total > 0
+                ? Math.min(
+                    100,
+                    Math.max(2, Math.round((op.progress / op.total) * 100)),
+                  )
+                : 0;
 
-          return (
-            <div style={{ width: "100%" }}>
-              <div class="split-head">
-                <div class="list-row-main">
-                  <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
-                    <strong>
-                      {formatOpKind(locale, op.kind)}
-                      {op.asset_id
-                        ? ` · ${op.asset_id}`
-                        : op.deployment_id
-                          ? ` · ${op.deployment_id}`
-                          : ""}
-                    </strong>
-                    <Badge tone={badgeTone}>{badgeText}</Badge>
+            return (
+              <div style={{ width: "100%" }}>
+                <div class="split-head">
+                  <div class="list-row-main">
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: "8px",
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <strong>
+                        {formatOpKind(locale, op.kind)}
+                        {op.asset_id
+                          ? ` · ${op.asset_id}`
+                          : op.deployment_id
+                            ? ` · ${op.deployment_id}`
+                            : ""}
+                      </strong>
+                      <Badge tone={badgeTone}>{badgeText}</Badge>
+                    </div>
+                    <p class="hint" style={{ margin: "4px 0 0" }}>
+                      {[
+                        progressLabel,
+                        op.repository
+                          ? `${en ? "Repo" : "仓库"}: ${op.repository}`
+                          : "",
+                        op.detail || "",
+                        new Date(op.updated_at).toLocaleString(),
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </p>
                   </div>
-                  <p class="hint" style={{ margin: "4px 0 0" }}>
-                    {[
-                      progressLabel,
-                      op.repository ? `${en ? "Repo" : "仓库"}: ${op.repository}` : "",
-                      op.detail || "",
-                      new Date(op.updated_at).toLocaleString(),
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
+
+                  <div class="actions" style={{ margin: 0 }}>
+                    {op.state === "running" ? (
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        icon={<IconSquare size={12} />}
+                        busy={store.isBusy(`op:cancel:${op.id}`)}
+                        onClick={() => void handleCancelOp(op)}
+                      >
+                        {en ? "Cancel" : "取消"}
+                      </Button>
+                    ) : null}
+                    {canRetry(op) ? (
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        icon={<IconRefresh size={13} />}
+                        busy={store.isBusy(`op:retry:${op.id}`)}
+                        disabled={runningCount > 0}
+                        onClick={() => void handleRetryOp(op)}
+                      >
+                        {en ? "Retry" : "重试"}
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
+
+                {op.state === "running" ? (
+                  <div class="mg-progress-track">
+                    <div
+                      class={`mg-progress-fill${op.total <= 0 ? " indeterminate" : ""}`}
+                      style={op.total > 0 ? { width: `${pct}%` } : undefined}
+                    />
+                  </div>
+                ) : null}
+
+                {op.state === "cancelled" ? (
+                  <p class="hint" style={{ marginTop: "6px" }}>
+                    {en
+                      ? "Cancelled. Previously installed assets remain intact."
+                      : "已取消，先前安装的模型与运行时保持完整。"}
                   </p>
-                </div>
-
-                <div class="actions">
-                  {op.state === "running" ? (
-                    <Button
-                      variant="danger"
-                      busy={store.isBusy(`op:cancel:${op.id}`)}
-                      onClick={() => void handleCancelOp(op)}
-                    >
-                      {en ? "Cancel" : "取消"}
-                    </Button>
-                  ) : null}
-                  {canRetry(op) ? (
-                    <Button
-                      variant="primary"
-                      busy={store.isBusy(`op:retry:${op.id}`)}
-                      disabled={runningCount > 0}
-                      onClick={() => void handleRetryOp(op)}
-                    >
-                      {en ? "Retry" : "重试"}
-                    </Button>
-                  ) : null}
-                </div>
-              </div>
-
-              {/* M-28: Determinate bar when total > 0, smooth indeterminate animation when total == 0 */}
-              {op.state === "running" ? (
-                <div class="mg-progress-track">
+                ) : op.error ? (
                   <div
-                    class={`mg-progress-fill${op.total <= 0 ? " indeterminate" : ""}`}
-                    style={op.total > 0 ? { width: `${pct}%` } : undefined}
-                  />
-                </div>
-              ) : null}
-
-              {/* M-09: Explanatory cancellation note vs error reason */}
-              {op.state === "cancelled" ? (
-                <p class="hint" style={{ marginTop: "6px" }}>
-                  {en
-                    ? "Task cancelled by user. Previously installed models and runtimes remain intact."
-                    : "任务已取消，已验证安装的模型与运行时保持完整可用。"}
-                </p>
-              ) : op.error ? (
-                <div
-                  class="feedback-banner"
-                  data-tone={op.state === "interrupted" ? "warning" : "error"}
-                  style={{ marginTop: "8px", marginBottom: 0 }}
-                >
-                  <div>
-                    <span>{resolveError(op.error, uiLang).message}</span>
+                    class="feedback-banner"
+                    data-tone={op.state === "interrupted" ? "warning" : "error"}
+                    style={{ marginTop: "8px", marginBottom: 0 }}
+                  >
+                    <div>
+                      <span>{resolveError(op.error, uiLang).message}</span>
+                    </div>
+                    {op.error.includes(":") ? (
+                      <details style={{ marginTop: "6px" }}>
+                        <summary>
+                          <span>{en ? "Technical details" : "展开原始原因"}</span>
+                        </summary>
+                        <div class="ds-disclosure-body">
+                          <pre>{op.error}</pre>
+                        </div>
+                      </details>
+                    ) : null}
                   </div>
-                  {op.error.includes(":") ? (
-                    <details>
-                      <summary>{en ? "Technical details" : "展开原始原因"}</summary>
-                      <pre>{op.error}</pre>
-                    </details>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-          );
-        }}
-      />
+                ) : null}
+              </div>
+            );
+          }}
+        />
+      </SettingGroup>
     </section>
   );
 }

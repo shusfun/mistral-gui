@@ -40,7 +40,7 @@ func TestGeneratedReleaseIsAcceptedByUpdater(t *testing.T) {
 	s := httptest.NewTLSServer(http.FileServer(http.Dir(dir)))
 	defer s.Close()
 	m, e := update.FetchSigned(context.Background(), s.Client(), s.URL+"/release-manifest.json", base64.StdEncoding.EncodeToString(pub))
-	if e != nil || len(m.Assets) != 3 {
+	if e != nil || len(m.Assets) != 6 {
 		t.Fatalf("%+v %v", m, e)
 	}
 	for _, a := range m.Assets {

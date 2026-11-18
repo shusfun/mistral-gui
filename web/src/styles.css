@@ -1,34 +1,87 @@
-/* mistral-gui Workbench Shell & Desktop Frameless Window Styles */
-
-html.desktop body {
-  padding-top: 38px;
+/* mistral Native Desktop Client Shell & Dual-Pane Translator Studio */
+:root {
+  --brand-icon-size: 24px;
+  --brand-gap: 8px;
+  --palette-accent: #0284c7;
+  --palette-accent-soft: rgba(2, 132, 199, 0.09);
+  --palette-on-accent: #ffffff;
 }
 
-/* M-21: Frameless titlebar stays at z-index: 10000 above all modal backdrops (z-index: 9000) */
+:root[data-theme="dark"] {
+  --palette-accent: #38bdf8;
+  --palette-accent-soft: rgba(56, 189, 248, 0.14);
+  --palette-on-accent: #071320;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="dark"]) {
+    --palette-accent: #38bdf8;
+    --palette-accent-soft: rgba(56, 189, 248, 0.14);
+    --palette-on-accent: #071320;
+  }
+}
+
+.mistral-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--brand-gap);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.mistral-brand img {
+  width: var(--brand-icon-size);
+  height: var(--brand-icon-size);
+  object-fit: contain;
+}
+
+/* Native Frameless Titlebar: Seamless drag strip + window controls (no duplicate logo over sidebar) */
 .desktop-titlebar {
   position: fixed;
-  inset: 0 0 auto 0;
+  inset: 0 0 auto 214px;
   height: 38px;
   z-index: 10000;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 0 0 14px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  justify-content: flex-end;
+  padding: 0;
+  background: transparent;
+  border-bottom: 0;
   user-select: none;
   --wails-draggable: drag;
 }
 
+.desktop-titlebar.standalone {
+  inset: 0 0 auto 0;
+  justify-content: space-between;
+  padding-left: 14px;
+  background: var(--color-sidebar);
+  border-bottom: 1px solid var(--color-border);
+}
+
 html.mac .desktop-titlebar {
+  inset: 0 0 auto 0;
+}
+
+html.mac .desktop-titlebar.standalone {
   padding-left: 78px;
 }
 
+html.fullscreen .desktop-titlebar {
+  display: none;
+}
+
 .desktop-titlebar-brand {
+  --brand-icon-size: 18px;
   font-size: 12px;
   font-weight: 600;
-  color: var(--muted);
-  letter-spacing: 0.02em;
+  color: var(--color-muted);
+}
+
+.desktop-titlebar-brand .mistral-brand {
+  font-size: 12px;
+  gap: 6px;
 }
 
 .desktop-window-controls {
@@ -38,140 +91,238 @@ html.mac .desktop-titlebar {
 }
 
 .desktop-window-controls button {
-  border: none;
+  border: 0;
   border-radius: 0;
+  box-shadow: none;
   background: transparent;
-  width: 44px;
+  width: 46px;
   height: 100%;
+  min-height: 0;
   padding: 0;
-  font-size: 13px;
-  color: var(--ink);
+  color: var(--color-text);
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
 }
 
 .desktop-window-controls button:hover:not(:disabled) {
-  background: var(--surface-muted);
+  background: color-mix(in srgb, var(--color-text) 8%, transparent);
+  transform: none;
 }
 
 .desktop-window-controls button.close-btn:hover:not(:disabled) {
-  background: #c42b1c;
-  color: #fff;
+  background: #e81123;
+  color: #ffffff;
 }
 
-/* Override modal backdrop top offset when desktop titlebar is visible */
-html.desktop .modal-backdrop {
-  top: 38px;
+html.desktop body {
+  padding-top: 0;
+  overflow: hidden;
 }
 
+/* Full-Bleed Native Two-Pane Desktop Shell */
 .mg-shell {
-  max-width: 1240px;
-  margin: 0 auto;
-  padding: 24px 20px 44px;
   display: grid;
-  grid-template-columns: 228px minmax(0, 1fr);
-  gap: 22px;
-  align-items: start;
+  grid-template-columns: 214px minmax(0, 1fr);
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--color-bg);
 }
 
 .mg-sidebar {
-  position: sticky;
-  top: 24px;
-  display: grid;
-  gap: 12px;
+  height: 100%;
+  background: var(--color-sidebar);
+  border-right: 1px solid var(--color-border);
+  padding: 14px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  user-select: none;
 }
 
-html.desktop .mg-sidebar {
-  top: 56px;
+html.desktop.mac:not(.fullscreen) .mg-sidebar {
+  padding-top: 46px;
 }
 
-.mg-brand-card {
-  padding: 14px 16px;
-}
-
-.mg-brand-title {
+.mg-sidebar-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  padding: 2px 6px;
+}
+
+html.desktop .mg-sidebar-head {
+  --wails-draggable: drag;
 }
 
 .mg-nav {
-  display: grid;
-  gap: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .mg-nav-btn {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   width: 100%;
+  min-height: 34px;
   text-align: left;
-  padding: 9px 12px;
+  padding: 0 10px;
   border-radius: var(--radius-sm);
-  border: 1px solid transparent;
+  border: 0;
+  box-shadow: none;
   background: transparent;
-  color: var(--muted);
+  color: var(--color-muted);
+  font-size: var(--font-sm);
   font-weight: 500;
 }
 
+.mg-nav-btn-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
 .mg-nav-btn:hover:not(:disabled) {
-  background: var(--surface);
-  color: var(--ink);
+  background: color-mix(in srgb, var(--color-text) 5%, transparent);
+  color: var(--color-text);
 }
 
 .mg-nav-btn[aria-current="page"] {
-  background: var(--surface);
-  border-color: var(--border-strong);
-  color: var(--ink);
-  font-weight: 650;
-  box-shadow: var(--shadow-sm);
+  background: var(--color-panel);
+  color: var(--color-text);
+  font-weight: 600;
+  box-shadow: var(--shadow-xs);
+}
+
+.mg-nav-btn[aria-current="page"] .ds-icon {
+  color: var(--color-accent);
+}
+
+.mg-sidebar-foot {
+  margin-top: auto;
+  padding: 8px 8px 2px;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11.5px;
+  color: var(--color-muted);
+}
+
+.mg-main-scroll {
+  height: 100%;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+html.desktop:not(.fullscreen) .mg-main-scroll {
+  margin-top: 38px;
+  height: calc(100dvh - 38px);
 }
 
 .mg-main {
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px 28px 48px;
   min-width: 0;
+}
+
+html.desktop:not(.fullscreen) .mg-main {
+  padding-top: 10px;
+}
+
+.mg-main.wide {
+  max-width: 1080px;
+}
+
+/* Unwrap outer .panel.mg-section so content sits cleanly on the desktop canvas */
+section.panel.mg-section {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  margin: 0;
+}
+
+.mg-page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.mg-page-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mg-page-title {
+  font-size: var(--font-xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.grid-2 {
   display: grid;
-  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  min-width: 0;
 }
 
-.mg-section {
-  padding: 22px;
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  min-width: 0;
 }
 
-/* M-42: Search bar spans full remaining width cleanly */
 .mg-filter-bar {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) auto;
-  gap: 12px;
+  gap: 10px;
   align-items: end;
-  margin: 14px 0;
+  margin: 10px 0 14px;
 }
 
 .mg-filter-bar .field {
   margin: 0;
 }
 
-/* Indeterminate progress bar for unknown-length background checks (M-28) */
+/* Smooth Progress Track */
 .mg-progress-track {
   width: 100%;
-  height: 7px;
+  height: 5px;
   border-radius: 999px;
-  background: var(--surface-muted);
+  background: var(--color-sunken);
   overflow: hidden;
   margin-top: 8px;
 }
 
 .mg-progress-fill {
   height: 100%;
-  background: var(--accent);
+  background: var(--color-accent);
   border-radius: 999px;
-  transition: width 0.2s ease;
+  transition: width 220ms var(--ease-out);
 }
 
 .mg-progress-fill.indeterminate {
   width: 36%;
-  animation: mg-slide 1.25s ease-in-out infinite;
+  animation: mg-slide 1.2s ease-in-out infinite;
 }
 
 @keyframes mg-slide {
@@ -183,13 +334,144 @@ html.desktop .mg-sidebar {
   }
 }
 
-/* Interactive Screenshot Region Cropper */
+/* DeepL / Youdao-Style Seamless Dual-Pane Translator Studio */
+.mg-translator-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
+}
+
+.mg-translator-bar-left,
+.mg-translator-bar-right {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mg-lang-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-xs);
+  color: var(--color-muted);
+}
+
+.mg-studio-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-height: 380px;
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.mg-studio-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 340px;
+}
+
+.mg-studio-pane + .mg-studio-pane {
+  border-left: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-sunken) 35%, var(--color-panel));
+}
+
+.mg-studio-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--color-border);
+  min-height: 44px;
+}
+
+.mg-studio-textarea {
+  flex: 1;
+  width: 100%;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  padding: 16px 18px !important;
+  font-size: 14.5px !important;
+  line-height: 1.65 !important;
+  resize: none;
+}
+
+.mg-studio-textarea:focus {
+  box-shadow: none !important;
+}
+
+.mg-studio-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 14px;
+  border-top: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-sunken) 30%, var(--color-panel));
+}
+
+.mg-studio-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px;
+  color: var(--color-muted);
+  font-size: var(--font-sm);
+  text-align: center;
+}
+
+/* Image / Screenshot Stage + Adjacent Floating Paragraph Comparison */
+.mg-image-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.95fr);
+  gap: 14px;
+  align-items: start;
+  margin-bottom: 14px;
+}
+
+.mg-image-workbench.single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.mg-crop-card {
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.mg-crop-stage-wrap {
+  padding: 12px;
+  background: var(--color-sunken);
+  display: flex;
+  justify-content: center;
+}
+
 .mg-crop-stage {
   position: relative;
   display: inline-block;
   max-width: 100%;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  border: 1px solid var(--color-border-strong);
   overflow: hidden;
   cursor: crosshair;
   user-select: none;
@@ -206,27 +488,132 @@ html.desktop .mg-sidebar {
 
 .mg-crop-rect {
   position: absolute;
-  border: 2px solid var(--accent);
-  background: rgba(20, 108, 67, 0.14);
+  border: 2px solid var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.36);
   pointer-events: none;
 }
 
-@media (max-width: 860px) {
-  .mg-shell {
+.mg-image-overlay-box {
+  position: absolute;
+  background: color-mix(in srgb, var(--color-panel) 94%, transparent);
+  backdrop-filter: blur(4px);
+  color: var(--color-text);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 5px;
+  padding: 3px 6px;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow: auto;
+  box-shadow: var(--shadow-sm);
+  pointer-events: auto;
+}
+
+.mg-float-card {
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--material-shadow-strong);
+  display: flex;
+  flex-direction: column;
+  max-height: 500px;
+  min-width: 0;
+}
+
+.mg-float-body {
+  padding: 12px 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+}
+
+.mg-para-item {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  transition: background-color 140ms var(--ease-out);
+}
+
+.mg-para-item:hover {
+  background: color-mix(in srgb, var(--color-text) 3.5%, transparent);
+}
+
+.mg-para-item + .mg-para-item {
+  border-top: 1px solid var(--color-border);
+  border-radius: 0;
+  padding-top: 12px;
+}
+
+.mg-para-raw {
+  margin: 0 0 4px;
+  color: var(--color-muted);
+  font-size: var(--font-xs);
+  line-height: 1.5;
+  white-space: pre-line;
+}
+
+.mg-para-trans {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 14.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 920px) {
+  .mg-image-workbench,
+  .mg-studio-card {
     grid-template-columns: 1fr;
   }
+  .mg-studio-pane + .mg-studio-pane {
+    border-left: 0;
+    border-top: 1px solid var(--color-border);
+  }
+}
+
+@media (max-width: 820px) {
+  html.desktop body {
+    overflow: auto;
+  }
+  html.desktop:not(.fullscreen) body {
+    padding-top: 38px;
+  }
+  .desktop-titlebar {
+    inset: 0 0 auto 0;
+    background: var(--color-sidebar);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .mg-shell {
+    grid-template-columns: 1fr;
+    height: auto;
+    overflow: visible;
+  }
   .mg-sidebar {
-    position: static;
+    height: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
   }
   .mg-nav {
-    display: flex;
+    flex-direction: row;
     flex-wrap: wrap;
   }
   .mg-nav-btn {
     width: auto;
   }
-  .mg-filter-bar {
+  .mg-main-scroll,
+  html.desktop:not(.fullscreen) .mg-main-scroll {
+    margin-top: 0;
+    height: auto;
+    overflow: visible;
+  }
+  .mg-main,
+  html.desktop:not(.fullscreen) .mg-main {
+    padding: 16px;
+  }
+  .mg-filter-bar,
+  .grid-2,
+  .grid-3 {
     grid-template-columns: 1fr;
   }
 }

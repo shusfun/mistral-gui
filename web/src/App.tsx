@@ -3,6 +3,14 @@ import {
   Badge,
   Button,
   ConfirmHost,
+  IconBox,
+  IconCpu,
+  IconLayoutGrid,
+  IconListChecks,
+  IconServer,
+  IconSettings,
+  IconTerminal,
+  IconTranslate,
   StateBlock,
   ToastViewport,
   applyTheme,
@@ -18,6 +26,7 @@ import {
   nativeCommand,
   onAuthRequired,
 } from "./api";
+import { Brand } from "./components/Brand";
 import { LanguageModal, LoginModal } from "./components/Modals";
 import { Titlebar } from "./components/Titlebar";
 import {
@@ -120,9 +129,9 @@ export function App() {
     }
   };
 
-  const loadModelsList = async () => {
+  const loadModelsList = async (trace?: string) => {
     try {
-      const res = await api<{ models: CatalogAsset[] }>("/api/v1/models");
+      const res = await api<{ models: CatalogAsset[] }>("/api/v1/models", undefined, { trace });
       setInstalledModels(
         (res.models || []).filter((m) => m.kind === "model"),
       );
@@ -131,7 +140,10 @@ export function App() {
     }
   };
 
-  const handleIncomingOperations = (ops: OperationItem[], loc: ManagerLocale) => {
+  const handleIncomingOperations = (
+    ops: OperationItem[],
+    loc: ManagerLocale,
+  ) => {
     if (!seenCompletedOpsRef.current) {
       seenCompletedOpsRef.current = new Set(
         ops
@@ -165,9 +177,10 @@ export function App() {
     }
   };
 
-  const loadStatus = async (): Promise<StatusResponse | null> => {
+  const loadStatus = async (trace?: string): Promise<StatusResponse | null> => {
     const st = await api<StatusResponse>("/api/v1/status", undefined, {
       suppressAuthTrigger: true,
+      trace,
     });
     setData(st);
     setFatalLoadError(null);
@@ -219,7 +232,7 @@ export function App() {
     });
   };
 
-  // Full initialization (runs on startup AND after Token login — fixes M-04!)
+  // Full initialization (runs on startup AND after Token login — M-04)
   const initializeSession = async () => {
     setInitialLoading(true);
     try {
@@ -240,7 +253,11 @@ export function App() {
               setPendingScreenshot(payload.image_base64);
               navigateHash("#translate");
             } else if (payload.error) {
-              toast(resolveError(payload.error, toUiLang(st.settings.language)).message, "error");
+              toast(
+                resolveError(payload.error, toUiLang(st.settings.language))
+                  .message,
+                "error",
+              );
             }
           },
         });
@@ -258,6 +275,9 @@ export function App() {
   };
 
   useEffect(() => {
+    if (isDesktopMode) {
+      document.documentElement.classList.add("desktop");
+    }
     onAuthRequired(() => {
       sseRef.current?.close();
       sseRef.current = null;
@@ -270,7 +290,6 @@ export function App() {
     window.addEventListener("hashchange", onHash);
     void initializeSession();
 
-    // Gentle 12s fallback poll ONLY when authenticated, visible, and not stopped (M-20, M-44)
     const timer = setInterval(() => {
       if (document.hidden || loginOpen || authDismissed || managerStopped) {
         return;
@@ -290,21 +309,18 @@ export function App() {
     };
   }, [authDismissed, loginOpen, managerStopped]);
 
-  // M-44: Full-page stopped state after quitting manager
   if (managerStopped) {
     return (
       <>
-        <Titlebar locale={locale} platform={data?.platform || ""} />
-        <div style={{ maxWidth: "680px", margin: "80px auto", padding: "20px" }}>
+        <Titlebar locale={locale} platform={data?.platform || ""} showBrand />
+        <div style={{ maxWidth: "560px", margin: "96px auto", padding: "20px" }}>
           <StateBlock
             kind="empty"
-            title={
-              en ? "mistral-gui Has Stopped" : "本地管理器 mistral-gui 已安全退出"
-            }
+            title={en ? "mistral Has Stopped" : "mistral 后台服务已安全退出"}
             message={
               en
-                ? "All local inference engines have been stopped and background polling is closed. Launch mistral-gui again anytime to reconnect."
-                : "所有本地推理引擎均已停止卸载，页面轮询已关闭。再次启动 mistral-gui 后点击下方重新连接即可。"
+                ? "All local inference engines have been unloaded and background polling is closed. Relaunch mistral anytime to reconnect."
+                : "所有本地推理引擎均已停止卸载。再次启动 mistral 后点击下方重新连接即可。"
             }
             retryLabel={en ? "Reconnect" : "重新连接"}
             onRetry={() => {
@@ -321,6 +337,27 @@ export function App() {
   const runningOps = (data?.operations || []).filter(
     (o) => o.state === "running",
   ).length;
+
+  const navIcon = (id: RouteId) => {
+    switch (id) {
+      case "overview":
+        return <IconLayoutGrid size={16} />;
+      case "translate":
+        return <IconTranslate size={16} />;
+      case "instances":
+        return <IconServer size={16} />;
+      case "models":
+        return <IconBox size={16} />;
+      case "device":
+        return <IconCpu size={16} />;
+      case "connection":
+        return <IconTerminal size={16} />;
+      case "activity":
+        return <IconListChecks size={16} />;
+      case "updates":
+        return <IconSettings size={16} />;
+    }
+  };
 
   const navItems: { id: RouteId; label: string; badge?: number }[] = [
     { id: "overview", label: t(locale, "navOverview") },
@@ -344,28 +381,23 @@ export function App() {
 
       <div class="mg-shell">
         <aside class="mg-sidebar">
-          <div class="panel mg-brand-card">
-            <div class="mg-brand-title">
-              <strong>mistral-gui</strong>
-              <Badge
-                tone={
-                  data
-                    ? "success"
-                    : initialLoading
-                      ? "info"
-                      : "warning"
-                }
-              >
-                {data
-                  ? t(locale, "connected")
+          <div class="mg-sidebar-head">
+            <Brand />
+            <Badge
+              tone={
+                data
+                  ? "success"
                   : initialLoading
-                    ? t(locale, "connecting")
-                    : t(locale, "unauthorized")}
-              </Badge>
-            </div>
-            <p class="hint" style={{ margin: "6px 0 0" }}>
-              {t(locale, "workspaceSubtitle")}
-            </p>
+                    ? "info"
+                    : "warning"
+              }
+            >
+              {data
+                ? t(locale, "connected")
+                : initialLoading
+                  ? t(locale, "connecting")
+                  : t(locale, "unauthorized")}
+            </Badge>
           </div>
 
           <nav class="mg-nav" aria-label="Workspace navigation">
@@ -377,33 +409,45 @@ export function App() {
                 aria-current={routeState.route === item.id ? "page" : undefined}
                 onClick={() => navigateRoute(item.id)}
               >
-                <span>{item.label}</span>
+                <span class="mg-nav-btn-label">
+                  {navIcon(item.id)}
+                  <span>{item.label}</span>
+                </span>
                 {item.badge && item.badge > 0 ? (
                   <Badge tone="info">{item.badge}</Badge>
                 ) : null}
               </button>
             ))}
           </nav>
+
+          <div class="mg-sidebar-foot">
+            <span>{data?.version || ""}</span>
+            {data ? <span>{data.selected_backend.toUpperCase()}</span> : null}
+          </div>
         </aside>
 
-        <main class="mg-main">
-          {initialLoading && !data ? (
-            <section class="panel mg-section">
+        <div class="mg-main-scroll">
+          <main
+            class={
+              routeState.route === "translate" ? "mg-main wide" : "mg-main"
+            }
+          >
+            {initialLoading && !data ? (
               <StateBlock
                 kind="loading"
                 message={
                   en
-                    ? "Connecting to local mistral-gui manager…"
-                    : "正在连接本机 mistral-gui 服务…"
+                    ? "Connecting to local mistral manager…"
+                    : "正在连接本机 mistral 服务…"
                 }
                 lang={uiLang}
               />
-            </section>
-          ) : !data && (loginOpen || authDismissed) ? (
-            <section class="panel mg-section">
+            ) : !data && (loginOpen || authDismissed) ? (
               <StateBlock
                 kind="unauthorized"
-                title={en ? "Authentication Required" : "需要验证本机访问 Token"}
+                title={
+                  en ? "Authentication Required" : "需要验证本机访问 Token"
+                }
                 message={t(locale, "loginHint")}
                 action={
                   <Button
@@ -418,9 +462,7 @@ export function App() {
                 }
                 lang={uiLang}
               />
-            </section>
-          ) : fatalLoadError && !data ? (
-            <section class="panel mg-section">
+            ) : fatalLoadError && !data ? (
               <StateBlock
                 kind="failed"
                 title={en ? "Cannot Reach Manager" : "无法连接本地管理器"}
@@ -428,100 +470,105 @@ export function App() {
                 onRetry={() => void initializeSession()}
                 lang={uiLang}
               />
-            </section>
-          ) : data ? (
-            routeState.route === "overview" ? (
-              <OverviewPage
-                data={data}
-                locale={locale}
-                onRefresh={async () => {
-                  await loadStatus();
-                  await loadModelsList();
-                }}
-                onNavigate={navigateRoute}
-              />
-            ) : routeState.route === "translate" ? (
-              <TranslatePage
-                data={data}
-                locale={locale}
-                pendingScreenshot={pendingScreenshot}
-                onClearPendingScreenshot={() => setPendingScreenshot(null)}
-                onRefresh={async () => {
-                  await loadStatus();
-                }}
-                onNavigate={navigateRoute}
-              />
-            ) : routeState.route === "instances" ? (
-              <DeploymentsPage
-                data={data}
-                subPath={routeState.subPath}
-                installedModels={installedModels}
-                locale={locale}
-                onRefresh={async () => {
-                  await loadStatus();
-                  await loadModelsList();
-                }}
-                onNavigateHash={navigateHash}
-              />
-            ) : routeState.route === "models" ? (
-              <ModelsPage
-                data={data}
-                installedModels={installedModels}
-                deviceInfo={deviceInfo}
-                locale={locale}
-                onRefresh={async () => {
-                  await loadStatus();
-                  await loadModelsList();
-                }}
-              />
-            ) : routeState.route === "device" ? (
-              <DevicePage
-                deviceInfo={deviceInfo}
-                locale={locale}
-                onDetect={detectDevice}
-              />
-            ) : routeState.route === "connection" ? (
-              <ConnectionPage
-                data={data}
-                locale={locale}
-                onRefresh={async () => {
-                  await loadStatus();
-                }}
-              />
-            ) : routeState.route === "activity" ? (
-              <ActivityPage
-                operations={data.operations || []}
-                locale={locale}
-                onRefresh={async () => {
-                  await loadStatus();
-                  await loadModelsList();
-                }}
-              />
-            ) : (
-              <SettingsPage
-                data={data}
-                locale={locale}
-                trayUpdateCheck={trayUpdateCheck}
-                onRefresh={async () => {
-                  themeOverrideRef.current = null;
-                  await loadStatus();
-                }}
-                onLocaleSaved={(loc) => {
-                  setLocale(loc);
-                  document.documentElement.lang = loc;
-                }}
-                onThemePreview={(th) => {
-                  themeOverrideRef.current = th;
-                }}
-                onManagerQuit={() => {
-                  sseRef.current?.close();
-                  sseRef.current = null;
-                  setManagerStopped(true);
-                }}
-              />
-            )
-          ) : null}
-        </main>
+            ) : data ? (
+              <div
+                key={`${routeState.route}:${routeState.subPath}`}
+                class="page-enter"
+              >
+                {routeState.route === "overview" ? (
+                  <OverviewPage
+                    data={data}
+                    locale={locale}
+                    onRefresh={async () => {
+                      await loadStatus();
+                      await loadModelsList();
+                    }}
+                    onNavigate={navigateRoute}
+                  />
+                ) : routeState.route === "translate" ? (
+                  <TranslatePage
+                    data={data}
+                    locale={locale}
+                    pendingScreenshot={pendingScreenshot}
+                    onClearPendingScreenshot={() => setPendingScreenshot(null)}
+                    onRefresh={async () => {
+                      await loadStatus();
+                    }}
+                    onNavigate={navigateRoute}
+                  />
+                ) : routeState.route === "instances" ? (
+                  <DeploymentsPage
+                    data={data}
+                    subPath={routeState.subPath}
+                    installedModels={installedModels}
+                    locale={locale}
+                    onRefresh={async trace => {
+                      await loadStatus(trace);
+                      await loadModelsList(trace);
+                    }}
+                    onNavigateHash={navigateHash}
+                  />
+                ) : routeState.route === "models" ? (
+                  <ModelsPage
+                    data={data}
+                    installedModels={installedModels}
+                    deviceInfo={deviceInfo}
+                    locale={locale}
+                    onRefresh={async () => {
+                      await loadStatus();
+                      await loadModelsList();
+                    }}
+                  />
+                ) : routeState.route === "device" ? (
+                  <DevicePage
+                    deviceInfo={deviceInfo}
+                    locale={locale}
+                    onDetect={detectDevice}
+                  />
+                ) : routeState.route === "connection" ? (
+                  <ConnectionPage
+                    data={data}
+                    locale={locale}
+                    onRefresh={async () => {
+                      await loadStatus();
+                    }}
+                  />
+                ) : routeState.route === "activity" ? (
+                  <ActivityPage
+                    operations={data.operations || []}
+                    locale={locale}
+                    onRefresh={async () => {
+                      await loadStatus();
+                      await loadModelsList();
+                    }}
+                  />
+                ) : (
+                  <SettingsPage
+                    data={data}
+                    locale={locale}
+                    trayUpdateCheck={trayUpdateCheck}
+                    onRefresh={async trace => {
+                      themeOverrideRef.current = null;
+                      await loadStatus(trace);
+                    }}
+                    onLocaleSaved={(loc) => {
+                      setLocale(loc);
+                      document.documentElement.lang = loc;
+                    }}
+                    onThemePreview={(th) => {
+                      themeOverrideRef.current = th;
+                    }}
+                    onManagerQuit={() => {
+                      sseRef.current?.close();
+                      sseRef.current = null;
+                      setManagerStopped(true);
+                    }}
+                  />
+                )}
+              </div>
+            ) : null}
+          </main>
+        </div>
       </div>
 
       {/* M-43: Language selection modal only shown when settings.language === "" */}

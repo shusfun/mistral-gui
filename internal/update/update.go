@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -110,6 +109,7 @@ func FetchSigned(ctx context.Context, client *http.Client, raw, key string) (Man
 		return Manifest{}, e
 	}
 	signature, e := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sig)))
+	Phase(ctx, "verifying", sourceHost(raw))
 	if e != nil || !ed25519.Verify(pub, b, signature) {
 		return Manifest{}, errors.New("update_signature_invalid")
 	}
@@ -165,6 +165,8 @@ func VerifyFileSignature(filePath string, sigBytes []byte, base64PubKey string) 
 	return nil
 }
 func get(ctx context.Context, c *http.Client, raw string, n int64) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
 	if c == nil {
 		c = &http.Client{Timeout: 30 * time.Second}
 	}
@@ -172,13 +174,16 @@ func get(ctx context.Context, c *http.Client, raw string, n int64) ([]byte, erro
 	if e != nil {
 		return nil, e
 	}
+	if trace := Trace(ctx); trace != "" {
+		req.Header.Set("traceparent", trace)
+	}
 	resp, e := c.Do(req)
 	if e != nil {
 		return nil, e
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("metadata_http_%d", resp.StatusCode)
+		return nil, metadataStatusError(resp.StatusCode)
 	}
 	b, e := io.ReadAll(io.LimitReader(resp.Body, n+1))
 	if int64(len(b)) > n {

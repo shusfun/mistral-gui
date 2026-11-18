@@ -2,18 +2,24 @@ import { useState } from "preact/hooks";
 import {
   Badge,
   Button,
+  CopyButton,
   CopyField,
   Disclosure,
   FeedbackBanner,
+  IconCopy,
+  IconDownload,
+  IconEye,
+  IconEyeOff,
+  IconRefresh,
   Select,
-  VerdictHero,
+  SettingGroup,
   confirmAction,
   runTracked,
   toast,
   useFeedbackStore,
 } from "../shared/design-system";
 import { api, isDesktopMode, nativeCommand } from "../api";
-import { toUiLang, type ManagerLocale } from "../i18n";
+import { t, toUiLang, type ManagerLocale } from "../i18n";
 import type { StatusResponse } from "../types";
 
 export function ConnectionPage({
@@ -55,13 +61,13 @@ export function ConnectionPage({
       },
     );
 
-  // M-45: Immediate clear feedback on Token rotate and diagnostics export!
+  // M-45: Immediate clear feedback on Token rotate and diagnostics export
   const handleRotateToken = async () => {
     const ok = await confirmAction({
       title: en ? "Rotate Local Access Token" : "轮换本机访问 Token",
       message: en
         ? "Generate a new random token? Connected clients (such as Qingyi browser extension) will need the updated token."
-        : "确定重新生成访问 Token 吗？重新生成后，已配置的客户端（如浏览器中的轻译扩展）需要同步更新为此新 Token。",
+        : "确定重新生成访问 Token 吗？已配置的客户端（如轻译扩展）需同步更新为此新 Token。",
       danger: true,
       lang: uiLang,
     });
@@ -89,7 +95,8 @@ export function ConnectionPage({
       async () => {
         const tok = await ensureToken();
         const chosenDep = data.deployments.find(
-          (d) => d.id === selectedExampleModel || d.model === selectedExampleModel,
+          (d) =>
+            d.id === selectedExampleModel || d.model === selectedExampleModel,
         );
         const bundle = {
           localUrl: data.endpoint,
@@ -132,7 +139,7 @@ export function ConnectionPage({
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `mistral-gui-diagnostics-${new Date().toISOString().slice(0, 10)}.json`;
+        a.download = `mistral-diagnostics-${new Date().toISOString().slice(0, 10)}.json`;
         a.click();
         setTimeout(() => URL.revokeObjectURL(url), 10000);
         toast(
@@ -144,7 +151,7 @@ export function ConnectionPage({
       },
     );
 
-  // M-36: Clicking Refresh Logs automatically opens the Disclosure & shows explicit "(No logs yet)" when empty!
+  // M-36: Clicking Refresh Logs automatically opens the Disclosure & shows explicit empty state
   const handleRefreshLogs = () =>
     runTracked(
       { key: "conn:logs", scope: "connection", lang: uiLang },
@@ -155,7 +162,7 @@ export function ConnectionPage({
       },
     );
 
-  // M-17: Executable curl examples for BOTH Bash and Windows PowerShell that dynamically reflect selected deployment!
+  // M-17: Executable curl examples for BOTH Bash and Windows PowerShell
   const targetModelParam = selectedExampleModel || data.settings.model;
   const displayTok = revealed && tokenValue ? tokenValue : "<YOUR_LOCAL_TOKEN>";
 
@@ -174,40 +181,44 @@ Invoke-RestMethod -Method Post -Uri "${data.endpoint}/v1/chat/completions" \`
 
   return (
     <section class="panel mg-section">
-      <VerdictHero
-        eyebrow={en ? "LOCAL LOOPBACK API & DIAGNOSTICS" : "本地 OpenAI 兼容接口与脱敏诊断"}
-        title={data.endpoint}
-        description={
-          en
-            ? "Bound strictly to loopback (127.0.0.1) with Bearer token authentication and Origin/Host isolation."
-            : "严格绑定本机回环地址（127.0.0.1），通过 Bearer Token、Origin 白名单与 CSRF 校验双重保护。"
-        }
-        badge={<Badge tone="success">OpenAI v1</Badge>}
-        actions={
-          <>
-            <Button
-              variant="primary"
-              busy={store.isBusy("conn:copy-qy")}
-              onClick={handleCopyQingyiConfig}
-            >
-              {en
-                ? "Copy Qingyi Connection JSON"
-                : "一键复制轻译连接配置 JSON"}
-            </Button>
-            <Button
-              busy={store.isBusy("conn:export")}
-              onClick={handleExportDiagnostics}
-            >
-              {en ? "Export Redacted Diagnostics" : "导出脱敏诊断包"}
-            </Button>
-          </>
-        }
-      />
+      <div class="mg-page-head">
+        <div class="mg-page-title-group">
+          <h1 class="mg-page-title">{t(locale, "navConnection")}</h1>
+          <Badge tone="success">OpenAI v1</Badge>
+          <span class="hint">{data.endpoint}</span>
+        </div>
+        <div class="actions" style={{ margin: 0 }}>
+          <Button
+            variant="primary"
+            size="sm"
+            icon={<IconCopy size={13} />}
+            busy={store.isBusy("conn:copy-qy")}
+            onClick={handleCopyQingyiConfig}
+          >
+            {en ? "Copy Qingyi JSON" : "一键复制轻译连接 JSON"}
+          </Button>
+          <Button
+            size="sm"
+            icon={<IconDownload size={13} />}
+            busy={store.isBusy("conn:export")}
+            onClick={handleExportDiagnostics}
+          >
+            {en ? "Export Diagnostics" : "导出脱敏诊断包"}
+          </Button>
+        </div>
+      </div>
 
       <FeedbackBanner scope="connection" lang={uiLang} />
 
-      <fieldset>
-        <legend>{en ? "Access Token & Endpoints" : "访问凭证与接口地址"}</legend>
+      <SettingGroup
+        title={en ? "Endpoints & Access Token" : "接口地址与访问凭证"}
+        description={
+          en
+            ? "Bound strictly to loopback (127.0.0.1) with DPAPI-encrypted Token protection."
+            : "严格绑定本机回环地址（127.0.0.1），Token 经系统 DPAPI 加密存储。"
+        }
+        padded
+      >
         <div class="grid-2">
           <CopyField
             label={en ? "Manager Base URL (for Qingyi)" : "本地管理器根地址（轻译填写此项）"}
@@ -229,8 +240,10 @@ Invoke-RestMethod -Method Post -Uri "${data.endpoint}/v1/chat/completions" \`
             copyValue={tokenValue || undefined}
             lang={uiLang}
           />
-          <div class="actions">
+          <div class="actions" style={{ marginBottom: 0 }}>
             <Button
+              size="sm"
+              icon={revealed ? <IconEyeOff size={13} /> : <IconEye size={13} />}
               busy={store.isBusy("conn:reveal")}
               onClick={handleToggleReveal}
             >
@@ -243,35 +256,36 @@ Invoke-RestMethod -Method Post -Uri "${data.endpoint}/v1/chat/completions" \`
                   : "显示 Token"}
             </Button>
             <Button
+              size="sm"
+              icon={<IconCopy size={13} />}
               onClick={async () => {
                 const tok = await ensureToken();
                 await navigator.clipboard.writeText(tok);
                 toast(en ? "Token copied." : "已复制访问 Token。", "success");
               }}
             >
-              {en ? "Copy Token" : "直接复制 Token"}
+              {en ? "Copy Token" : "复制 Token"}
             </Button>
             <Button
+              size="sm"
               variant="danger"
+              icon={<IconRefresh size={13} />}
               busy={store.isBusy("conn:rotate")}
               onClick={() => void handleRotateToken()}
             >
               {en ? "Rotate Token" : "重新生成 Token"}
             </Button>
           </div>
-          <p class="hint">
-            {en
-              ? "Stored locally with OS credential protection (Windows DPAPI). Never uploaded or included in diagnostics."
-              : "Token 在 Windows 上经系统 DPAPI 加密落盘，导出诊断日志时自动脱敏为 [redacted]。"}
-          </p>
         </div>
-      </fieldset>
+      </SettingGroup>
 
       {/* M-17: Dynamic runnable CLI snippets */}
-      <fieldset>
-        <legend>{en ? "Runnable API Examples" : "可直接运行的命令行调用示例"}</legend>
+      <SettingGroup
+        title={en ? "CLI Examples" : "命令行调用示例"}
+        padded
+      >
         <Select
-          label={en ? "Target Deployment / Model" : "选择示例调用的目标部署或模型"}
+          label={en ? "Target Deployment / Model" : "示例目标部署或模型"}
           value={selectedExampleModel}
           options={data.deployments.map((d) => ({
             value: d.default ? d.model : d.id,
@@ -284,75 +298,60 @@ Invoke-RestMethod -Method Post -Uri "${data.endpoint}/v1/chat/completions" \`
         <div class="grid-2" style={{ marginTop: "12px" }}>
           <div>
             <div class="split-head" style={{ marginBottom: "6px" }}>
-              <strong>Bash / curl</strong>
-              <Button
-                variant="ghost"
-                onClick={async () => {
-                  await navigator.clipboard.writeText(bashExample);
-                  toast(en ? "Copied curl command." : "已复制 curl 命令。", "success");
-                }}
-              >
-                {en ? "Copy" : "复制"}
-              </Button>
+              <strong style={{ fontSize: "var(--font-xs)" }}>Bash / curl</strong>
+              <CopyButton text={bashExample} size="sm" variant="ghost" lang={uiLang} />
             </div>
             <pre style={{ overflowX: "auto", margin: 0 }}>{bashExample}</pre>
           </div>
           <div>
             <div class="split-head" style={{ marginBottom: "6px" }}>
-              <strong>Windows PowerShell</strong>
-              <Button
-                variant="ghost"
-                onClick={async () => {
-                  await navigator.clipboard.writeText(pwshExample);
-                  toast(
-                    en ? "Copied PowerShell snippet." : "已复制 PowerShell 命令。",
-                    "success",
-                  );
-                }}
-              >
-                {en ? "Copy" : "复制"}
-              </Button>
+              <strong style={{ fontSize: "var(--font-xs)" }}>PowerShell</strong>
+              <CopyButton text={pwshExample} size="sm" variant="ghost" lang={uiLang} />
             </div>
             <pre style={{ overflowX: "auto", margin: 0 }}>{pwshExample}</pre>
           </div>
         </div>
-      </fieldset>
+      </SettingGroup>
 
       {/* M-36: Auto-expanding manager logs with clear empty state */}
-      <fieldset>
-        <legend>{en ? "Redacted Manager Logs" : "管理器最近运行日志（已脱敏）"}</legend>
-        <div class="actions" style={{ marginTop: 0, marginBottom: "10px" }}>
+      <SettingGroup
+        title={en ? "Manager Logs (Redacted)" : "管理器运行日志（已脱敏）"}
+        actions={
           <Button
+            size="sm"
+            icon={<IconRefresh size={13} />}
             busy={store.isBusy("conn:logs")}
             onClick={handleRefreshLogs}
           >
-            {en ? "Refresh recent logs" : "读取并展开最近日志"}
+            {en ? "Load Recent Logs" : "读取最近日志"}
           </Button>
-        </div>
+        }
+        padded
+      >
         <Disclosure
           open={logsOpen}
           onToggleOpen={(next) => setLogsOpen(next)}
           summary={
-            en ? "Manager Log Tail (64 KiB)" : "展开查看 manager.log 尾部内容（64 KiB）"
+            en ? "manager.log tail (64 KiB)" : "查看 manager.log 尾部内容（64 KiB）"
           }
         >
           {logsContent === null ? (
-            <p class="muted" style={{ marginTop: "10px" }}>
+            <p class="muted" style={{ margin: 0 }}>
               {en
-                ? "Click 'Refresh recent logs' above to load."
-                : "点击上方「读取并展开最近日志」加载最新记录。"}
+                ? "Click 'Load Recent Logs' above to view."
+                : "点击右上角「读取最近日志」加载记录。"}
             </p>
           ) : logsContent === "" ? (
-            <p class="muted" style={{ marginTop: "10px" }}>
+            <p class="muted" style={{ margin: 0 }}>
               {en ? "No log entries recorded yet." : "暂无日志记录。"}
             </p>
           ) : (
-            <pre style={{ maxHeight: "280px", overflow: "auto", marginTop: "10px" }}>
+            <pre style={{ maxHeight: "280px", overflow: "auto", margin: 0 }}>
               {logsContent}
             </pre>
           )}
         </Disclosure>
-      </fieldset>
+      </SettingGroup>
     </section>
   );
 }

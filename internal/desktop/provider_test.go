@@ -8,18 +8,34 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/shusfun/mistral-gui/internal/app"
+	"github.com/shusfun/mistral-gui/internal/update"
 	"github.com/wailsapp/wails/v3/pkg/updater"
-	gh "github.com/wailsapp/wails/v3/pkg/updater/providers/github"
 )
 
 type updateTestHost struct{}
+type rewriteRoundTripper struct {
+	base *url.URL
+	next http.RoundTripper
+}
+
+func (t rewriteRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	u := *r.URL
+	u.Scheme = t.base.Scheme
+	u.Host = t.base.Host
+	r.URL = &u
+	return t.next.RoundTrip(r)
+}
 
 func (updateTestHost) Emit(string, ...any) bool         { return false }
 func (updateTestHost) OnEvent(string, func(any)) func() { return func() {} }
@@ -36,16 +52,21 @@ func TestResumableProviderWithWailsSignatureVerification(t *testing.T) {
 	_, _ = f.Write([]byte("new executable"))
 	_ = z.Close()
 	digest := sha256.Sum256(archive.Bytes())
-	for _, mode := range []string{"valid", "wrong-key", "missing-signature", "corrupt", "cancel"} {
+	for _, mode := range []string{"valid", "wrong-key", "missing-signature", "corrupt", "cancel", "old-manifest"} {
 		t.Run(mode, func(t *testing.T) {
-			var base string
-			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assetURL := "https://github.com/owner/manager/releases/download/v0.2.0/" + updateName("windows", "amd64")
+			m := update.Manifest{Version: "v0.2.0", Assets: []update.Asset{{OS: "windows", Arch: "amd64", Kind: "wails-update", URL: assetURL, SHA256: hex.EncodeToString(digest[:]), Size: int64(archive.Len())}}}
+			if mode == "old-manifest" {
+				m.Assets[0].Kind = "update"
+			}
+			manifest, _ := json.Marshal(m)
+			s := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
-				case strings.HasPrefix(r.URL.Path, "/repos/"):
-					fmt.Fprintf(w, `{"tag_name":"v0.2.0","assets":[{"name":"%s","url":"%s/update.zip","size":%d},{"name":"SHA256SUMS","url":"%s/SHA256SUMS"}]}`, updateName("windows", "amd64"), base, archive.Len(), base)
-				case r.URL.Path == "/SHA256SUMS":
-					fmt.Fprintf(w, "%x  %s\n", digest, updateName("windows", "amd64"))
-				case r.URL.Path == "/update.zip.sig":
+				case r.URL.Path == "/manifest":
+					w.Write(manifest)
+				case r.URL.Path == "/manifest.sig":
+					fmt.Fprint(w, base64.StdEncoding.EncodeToString(ed25519.Sign(priv, manifest)))
+				case strings.HasSuffix(r.URL.Path, ".zip.sig"):
 					if mode == "missing-signature" {
 						w.WriteHeader(404)
 						return
@@ -55,34 +76,37 @@ func TestResumableProviderWithWailsSignatureVerification(t *testing.T) {
 						_, key, _ = ed25519.GenerateKey(rand.Reader)
 					}
 					fmt.Fprint(w, base64.StdEncoding.EncodeToString(ed25519.Sign(key, digest[:])))
-				case r.URL.Path == "/update.zip":
+				case strings.HasSuffix(r.URL.Path, ".zip"):
 					if mode == "corrupt" {
 						_, _ = w.Write(bytes.Repeat([]byte("x"), archive.Len()))
 						return
 					}
 					_, _ = w.Write(archive.Bytes())
 				default:
+					t.Error("unexpected metadata path", r.URL.Path)
 					w.WriteHeader(404)
 				}
 			}))
 			defer s.Close()
-			base = s.URL
-			official, e := gh.New(gh.Config{Repository: "owner/manager", BaseURL: s.URL, ChecksumAsset: "SHA256SUMS", AssetMatcher: func(updater.CheckRequest, []gh.ReleaseAsset) int { return 0 }})
-			if e != nil {
-				t.Fatal(e)
-			}
+			base, _ := url.Parse(s.URL)
+			client := s.Client()
+			client.Transport = rewriteRoundTripper{base, client.Transport}
 			manager, e := app.New("127.0.0.1:0", t.TempDir())
 			if e != nil {
 				t.Fatal(e)
 			}
 			defer manager.Close()
-			p := &provider{official: official, manager: manager}
+			encodedKey := base64.StdEncoding.EncodeToString(pub)
+			p := &provider{manager: manager, client: client, repository: "owner/manager", publicKey: encodedKey, fetchManifest: func(ctx context.Context) (update.Manifest, error) {
+				return update.FetchSignedSources(ctx, client, s.URL+"/manifest", encodedKey, nil)
+			}}
 			u := updater.New(updateTestHost{})
 			if e = u.Init(updater.Config{CurrentVersion: "0.1.1", Providers: []updater.Provider{p}, PublicKey: pub, Window: updater.WindowNone}); e != nil {
 				t.Fatal(e)
 			}
-			_, e = u.Check(context.Background())
-			if mode == "missing-signature" {
+			traceCtx := update.WithTrace(context.Background(), "00-33333333333333333333333333333333-4444444444444444-01", nil)
+			_, e = u.Check(traceCtx)
+			if mode == "missing-signature" || mode == "wrong-key" || mode == "old-manifest" {
 				if e == nil {
 					t.Fatal("missing signature accepted")
 				}
@@ -91,7 +115,7 @@ func TestResumableProviderWithWailsSignatureVerification(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(traceCtx)
 			defer cancel()
 			if mode == "cancel" {
 				cancel()
