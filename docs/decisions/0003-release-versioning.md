@@ -1,6 +1,7 @@
 ---
-status: accepted
+status: superseded
 date: 2026-11-19
+superseded-by: 0004-release-history-reset
 ---
 
 # 0003 版本发布规则

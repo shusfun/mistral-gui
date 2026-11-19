@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][ValidateSet('v0.2.1','v0.3.0')][string]$PreviousVersion)
+param([Parameter(Mandatory)][ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+$')][string]$PreviousVersion)
 $ErrorActionPreference = 'Stop'
 if (!$env:RUNNER_TEMP -or !$env:GITHUB_ACTIONS) { throw 'Run on a disposable Actions runner only' }
 $runId = [guid]::NewGuid().ToString('N')
@@ -7,7 +7,7 @@ $installRoot = Join-Path $root 'app'
 $dataRoot = Join-Path $root 'data'
 $oldAssets = Join-Path $root 'old'
 New-Item -ItemType Directory -Path $oldAssets -Force | Out-Null
-gh release download $PreviousVersion --repo shusfun/mistral-gui --pattern mistral-gui-windows-x64-setup.exe --dir $oldAssets
+gh release download $PreviousVersion --repo $env:GITHUB_REPOSITORY --pattern mistral-gui-windows-x64-setup.exe --dir $oldAssets
 if ($LASTEXITCODE) { throw 'Could not obtain previous installer' }
 $binary = Join-Path $installRoot 'mistral-gui.exe'
 $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)

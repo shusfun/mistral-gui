@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release tag (v0.1.0)
+        description: Release tag (v0.1.1)
         required: true
       publish:
         description: Publish a new release (leave false when replacing an existing release)
@@ -144,10 +144,6 @@ jobs:
   upgrade:
     needs: manager
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        previous: [v0.2.1, v0.3.0]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -158,8 +154,10 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          PREVIOUS_VERSION: ${{ matrix.previous }}
-        run: ./installer/windows/upgrade-smoke.ps1 -PreviousVersion $env:PREVIOUS_VERSION
+        run: |
+          $previous = gh release view --repo $env:GITHUB_REPOSITORY --json tagName --jq '.tagName'
+          if ($LASTEXITCODE -or $previous -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Could not resolve the current manager release' }
+          ./installer/windows/upgrade-smoke.ps1 -PreviousVersion $previous
   metadata:
     needs: [manager, upgrade]
     runs-on: windows-latest
@@ -188,7 +186,7 @@ jobs:
         run: |
           gh release view $env:VERSION --json tagName *> $null
           if ($LASTEXITCODE -eq 0) { Write-Output 'Existing release retained for verified replacement.'; exit 0 }
-          gh release create $env:VERSION --verify-tag --generate-notes --latest (Get-ChildItem dist -File | ForEach-Object FullName)
+          gh release create $env:VERSION --verify-tag --generate-notes (Get-ChildItem dist -File | ForEach-Object FullName)
       - uses: actions/upload-artifact@v4
         with:
           name: manager-release-complete
