@@ -31,15 +31,18 @@ type TranslateRequest struct {
 	Model             string `json:"model"`
 	PreserveLines     bool   `json:"preserve_lines"`
 	ConfirmCloudImage bool   `json:"confirm_cloud_image"`
+	ReadyOnly         bool   `json:"ready_only"`
+	OCRDerived        bool   `json:"ocr_derived"`
 }
 
 type TranslateResponse struct {
-	Segments       []TranslateSegmentResult `json:"segments"`
-	OCRText        string                   `json:"ocr_text,omitempty"`
-	OCRRawText     string                   `json:"ocr_raw_text,omitempty"`
-	OCRMs          int64                    `json:"ocr_ms,omitempty"`
-	FallbackReason string                   `json:"fallback_reason,omitempty"`
-	ModelUsed      string                   `json:"model_used,omitempty"`
+	Segments                  []TranslateSegmentResult `json:"segments"`
+	OCRText                   string                   `json:"ocr_text,omitempty"`
+	OCRRawText                string                   `json:"ocr_raw_text,omitempty"`
+	OCRMs                     int64                    `json:"ocr_ms,omitempty"`
+	FallbackReason            string                   `json:"fallback_reason,omitempty"`
+	ModelUsed                 string                   `json:"model_used,omitempty"`
+	CloudConfirmationRequired bool                     `json:"cloud_confirmation_required,omitempty"`
 }
 
 func splitDesktopParagraphs(text string) []string {
@@ -85,13 +88,13 @@ func extractChatCompletionText(body []byte) (string, error) {
 	return txt, nil
 }
 
-func (a *App) callChatModelSingle(ctx context.Context, endpoint, bearer, model, source, targetLang, trace string) (string, error) {
-	prompt, err := BuildTranslationPrompt(model, []string{source}, targetLang)
+func (a *App) callChatModelSingle(ctx context.Context, endpoint, bearer, modelID, promptModel, source, targetLang, trace string) (string, error) {
+	prompt, err := BuildTranslationPrompt(promptModel, []string{source}, targetLang)
 	if err != nil {
 		return "", err
 	}
 	reqPayload := map[string]any{
-		"model": model,
+		"model": modelID,
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
@@ -124,6 +127,9 @@ func (a *App) callChatModelSingle(ctx context.Context, endpoint, bearer, model, 
 		return "", errors.New("invalid_response")
 	}
 	if resp.StatusCode != 200 {
+		if bearer == "" && resp.StatusCode >= http.StatusInternalServerError {
+			return "", errors.New("engine_inference_failed")
+		}
 		if resp.StatusCode == 401 || resp.StatusCode == 403 {
 			return "", errors.New("cloud_key_required")
 		}
@@ -139,54 +145,43 @@ func (a *App) callChatModelSingle(ctx context.Context, endpoint, bearer, model, 
 	return translated, nil
 }
 
-func (a *App) translateLocalSegment(ctx context.Context, deploymentID, source, targetLang, trace string) (string, string, error) {
-	root := a.root()
-	target := root
-	if deploymentID != "" {
-		resolved, err := root.resolveDeployment(deploymentID)
-		if err != nil {
-			return "", "", err
-		}
-		target = resolved
+func (a *App) reserveTranslationEngine(readyOnly bool) (*engineProcess, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if isProcessReady(a.engine) && a.state.State == "running" {
+		a.state.Active++
+		a.lastUse = time.Now()
+		return a.engine, nil
 	}
-	target.mu.Lock()
-	auto := target.config.AutoStart
-	running := target.engine != nil
-	modelName := target.config.Model
-	target.mu.Unlock()
-
-	if !running && !auto {
-		return "", "", errors.New("runtime_stopped")
+	if readyOnly {
+		return nil, errors.New("translation_model_not_ready")
 	}
-
-	target.mu.Lock()
-	target.state.Active++
-	target.lastUse = time.Now()
-	target.mu.Unlock()
-	defer func() {
-		target.mu.Lock()
-		target.state.Active--
-		target.lastUse = time.Now()
-		target.mu.Unlock()
-	}()
-
-	if err := target.ensureEngine(ctx, trace); err != nil {
-		return "", "", err
+	if a.engine == nil && !a.config.AutoStart {
+		return nil, errors.New("runtime_stopped")
 	}
-	target.mu.Lock()
-	p := target.engine
-	if p == nil {
-		target.mu.Unlock()
+	a.state.Active++
+	a.lastUse = time.Now()
+	return nil, nil
+}
+
+func (a *App) releaseTranslationEngine() {
+	a.mu.Lock()
+	a.state.Active--
+	a.lastUse = time.Now()
+	a.mu.Unlock()
+}
+
+func (a *App) translateLocalSegment(ctx context.Context, process *engineProcess, source, targetLang, trace string) (string, string, error) {
+	a.mu.Lock()
+	if a.engine != process || a.state.State != "running" {
+		a.mu.Unlock()
 		return "", "", errors.New("engine_exited")
 	}
-	engineEndpoint := p.target + "/v1/chat/completions"
-	modelName = target.config.Model
-	target.state.Requests++
-	target.lastUse = time.Now()
-	target.mu.Unlock()
-
-	tr, err := root.callChatModelSingle(ctx, engineEndpoint, "", modelName, source, targetLang, trace)
-	return tr, modelName, err
+	modelName := a.config.Model
+	a.state.Requests++
+	a.mu.Unlock()
+	translation, err := a.root().callChatModelSingle(ctx, process.target+"/v1/chat/completions", "", process.modelID, modelName, source, targetLang, trace)
+	return translation, modelName, err
 }
 
 func (a *App) translateCloudSegment(ctx context.Context, cloudURL, cloudKey, cloudModel, source, targetLang, trace string) (string, error) {
@@ -196,7 +191,8 @@ func (a *App) translateCloudSegment(ctx context.Context, cloudURL, cloudKey, clo
 	if strings.TrimSpace(cloudKey) == "" {
 		return "", errors.New("cloud_key_required")
 	}
-	return a.callChatModelSingle(ctx, strings.TrimSpace(cloudURL), strings.TrimSpace(cloudKey), strings.TrimSpace(cloudModel), source, targetLang, trace)
+	modelID := strings.TrimSpace(cloudModel)
+	return a.callChatModelSingle(ctx, strings.TrimSpace(cloudURL), strings.TrimSpace(cloudKey), modelID, modelID, source, targetLang, trace)
 }
 
 func (a *App) translateDesktop(w http.ResponseWriter, r *http.Request) {
@@ -233,11 +229,120 @@ func (a *App) translateDesktop(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "invalid_routing")
 		return
 	}
+	if req.ReadyOnly {
+		if routing == "cloud-only" {
+			logStage("model.ready_only", "skipped", -1)
+			fail(w, 409, "translation_model_not_ready")
+			return
+		}
+		routing = "local-only"
+	}
+	imageInput := strings.TrimSpace(req.ImageBase64) != ""
+	imageDerived := imageInput || req.OCRDerived
+	cloudConfigured := strings.TrimSpace(cfg.CloudAPIURL) != "" && strings.TrimSpace(cfg.CloudModel) != "" && strings.TrimSpace(cfg.CloudAPIKey) != ""
+	canSendCloud := func() bool {
+		root.mu.Lock()
+		defer root.mu.Unlock()
+		return !imageDerived || root.config.CloudImageConfirmed || (req.ConfirmCloudImage && !req.ReadyOnly)
+	}
+	cloudConfirmationRequired := false
+	var confirmCloudSave bool
+	defer func() {
+		if confirmCloudSave {
+			_ = root.save()
+		}
+	}()
+	translateCloud := func(source, targetLang string) (string, error) {
+		if imageDerived && cloudConfigured && req.ConfirmCloudImage && !req.ReadyOnly && !confirmCloudSave {
+			root.mu.Lock()
+			if !root.config.CloudImageConfirmed {
+				root.config.CloudImageConfirmed = true
+				confirmCloudSave = true
+			}
+			root.mu.Unlock()
+			if confirmCloudSave {
+				logStage("ocr.privacy_confirmation", "accepted", -1)
+			}
+		}
+		return root.translateCloudSegment(r.Context(), cfg.CloudAPIURL, cfg.CloudAPIKey, cfg.CloudModel, source, targetLang, trace)
+	}
 
 	srcLang := NormalizeRuleLang(req.SourceLang)
 	tgtLang := NormalizeRuleLang(req.TargetLang)
 	if tgtLang == "auto" || tgtLang == "*" {
 		tgtLang = "zh-CN"
+	}
+	var target *App
+	var process *engineProcess
+	var localErr error
+	var startDone chan error
+	var startCancel context.CancelFunc
+	var localPrepared, reserved bool
+	defer func() {
+		if startCancel != nil {
+			startCancel()
+		}
+		if reserved {
+			target.releaseTranslationEngine()
+		}
+	}()
+	prepareLocal := func() {
+		if localPrepared {
+			return
+		}
+		localPrepared = true
+		target, localErr = root.resolveDeployment(req.Model)
+		if localErr != nil {
+			return
+		}
+		process, localErr = target.reserveTranslationEngine(req.ReadyOnly)
+		if localErr != nil {
+			return
+		}
+		reserved = true
+		if process == nil {
+			var startCtx context.Context
+			startCtx, startCancel = context.WithCancel(r.Context())
+			startDone = make(chan error, 1)
+			go func() { startDone <- target.ensureEngine(startCtx, trace) }()
+		}
+	}
+	if req.ReadyOnly {
+		prepareLocal()
+		if localErr != nil {
+			logStage("model.ready_only", "skipped", -1)
+			fail(w, 409, "translation_model_not_ready")
+			return
+		}
+		logStage("model.ready_only", "hit", -1)
+	}
+	firstInference := true
+	translateLocal := func(source string, index int) (string, string, error) {
+		prepareLocal()
+		if startDone != nil {
+			localErr = <-startDone
+			startDone = nil
+			target.mu.Lock()
+			process = target.engine
+			target.mu.Unlock()
+			if localErr == nil && process == nil {
+				localErr = errors.New("engine_exited")
+			}
+		}
+		if localErr != nil {
+			return "", "", localErr
+		}
+		inferenceStarted := time.Now()
+		translated, model, err := target.translateLocalSegment(r.Context(), process, source, tgtLang, trace)
+		if firstInference {
+			outcome := "success"
+			if err != nil {
+				outcome = err.Error()
+			}
+			slog.Info("translation.first_inference", "traceId", traceRoot(trace), "outcome", outcome, "segment", index, "durationMs", time.Since(inferenceStarted).Milliseconds(), "code.file.path", "internal/app/translate.go", "code.function.name", "translateDesktop")
+			firstInference = false
+		}
+		return translated, model, err
 	}
 
 	inputText := strings.TrimSpace(req.Text)
@@ -247,7 +352,7 @@ func (a *App) translateDesktop(w http.ResponseWriter, r *http.Request) {
 	var builtParagraphs []OCRParagraph
 	rawLineCount := 0
 
-	if strings.TrimSpace(req.ImageBase64) != "" {
+	if imageInput {
 		rawB64 := strings.TrimSpace(req.ImageBase64)
 		if idx := strings.Index(rawB64, ","); idx >= 0 && strings.HasPrefix(rawB64, "data:") {
 			rawB64 = rawB64[idx+1:]
@@ -257,23 +362,21 @@ func (a *App) translateDesktop(w http.ResponseWriter, r *http.Request) {
 			fail(w, 400, "invalid_json")
 			return
 		}
-		// Privacy gate: if routing may send OCR-extracted text to cloud, require explicit one-time confirmation
-		if routing != "local-only" && !cfg.CloudImageConfirmed && !req.ConfirmCloudImage {
-			fail(w, 409, "cloud_image_confirmation_required")
-			return
+		imgW, imgH := decodeImageDimensions(imgBytes)
+		if !req.ReadyOnly && routing != "cloud-only" && imgW > 0 && imgH > 0 {
+			prepareLocal()
+			if startDone != nil {
+				logStage("model.ocr_overlap", "started", -1)
+			}
 		}
-		if req.ConfirmCloudImage && !cfg.CloudImageConfirmed {
-			root.mu.Lock()
-			root.config.CloudImageConfirmed = true
-			root.mu.Unlock()
-			_ = root.save()
-		}
+		logStage("ocr.recognize", "started", -1)
 		lines, elapsed, err := root.ensureOCRSupervisor().Recognize(r.Context(), imgBytes)
 		if err != nil {
+			logStage("ocr.recognize", "failed", -1)
 			fail(w, 503, err.Error())
 			return
 		}
-		imgW, imgH := decodeImageDimensions(imgBytes)
+		logStage("ocr.recognize", "success", -1)
 		ocrParas, mergedTxt, rawTxt, lineCnt := SegmentOCRLines(lines, imgW, imgH, req.PreserveLines)
 		ocrText = mergedTxt
 		ocrRawText = rawTxt
@@ -386,7 +489,7 @@ func (a *App) translateDesktop(w http.ResponseWriter, r *http.Request) {
 		switch routing {
 		case "local-only":
 			// Strict local-only guarantee: NEVER touches CloudAPIURL under any condition.
-			tr, mUsed, err := root.translateLocalSegment(r.Context(), req.Model, seg, tgtLang, trace)
+			tr, mUsed, err := translateLocal(seg, i)
 			if err != nil {
 				results[i] = TranslateSegmentResult{Source: seg, RawSource: rawSrc, Box: item.Box, Error: err.Error()}
 			} else {
@@ -394,7 +497,12 @@ func (a *App) translateDesktop(w http.ResponseWriter, r *http.Request) {
 				results[i] = TranslateSegmentResult{Source: seg, RawSource: rawSrc, Box: item.Box, Translation: tr, Channel: "local"}
 			}
 		case "cloud-only":
-			tr, err := root.translateCloudSegment(r.Context(), cfg.CloudAPIURL, cfg.CloudAPIKey, cfg.CloudModel, seg, tgtLang, trace)
+			if cloudConfigured && !canSendCloud() {
+				cloudConfirmationRequired = true
+				results[i] = TranslateSegmentResult{Source: seg, RawSource: rawSrc, Box: item.Box, Error: "cloud_image_confirmation_required"}
+				break
+			}
+			tr, err := translateCloud(seg, tgtLang)
 			if err != nil {
 				results[i] = TranslateSegmentResult{Source: seg, RawSource: rawSrc, Box: item.Box, Error: err.Error()}
 			} else {
@@ -402,19 +510,25 @@ func (a *App) translateDesktop(w http.ResponseWriter, r *http.Request) {
 				results[i] = TranslateSegmentResult{Source: seg, RawSource: rawSrc, Box: item.Box, Translation: tr, Channel: "cloud"}
 			}
 		default: // local-first
-			tr, mUsed, localErr := root.translateLocalSegment(r.Context(), req.Model, seg, tgtLang, trace)
+			tr, mUsed, localErr := translateLocal(seg, i)
 			if localErr == nil {
 				modelUsed = mUsed
 				results[i] = TranslateSegmentResult{Source: seg, RawSource: rawSrc, Box: item.Box, Translation: tr, Channel: "local"}
-				continue
+				break
 			}
-			if fallbackReason == "" {
-				fallbackReason = localErr.Error()
+			logStage("model.local_failed", localErr.Error(), i)
+			if !cloudConfigured || !canSendCloud() {
+				cloudConfirmationRequired = cloudConfirmationRequired || cloudConfigured
+				results[i] = TranslateSegmentResult{Source: seg, RawSource: rawSrc, Box: item.Box, Error: localErr.Error()}
+				break
 			}
-			cTr, cloudErr := root.translateCloudSegment(r.Context(), cfg.CloudAPIURL, cfg.CloudAPIKey, cfg.CloudModel, seg, tgtLang, trace)
+			cTr, cloudErr := translateCloud(seg, tgtLang)
 			if cloudErr != nil {
 				results[i] = TranslateSegmentResult{Source: seg, RawSource: rawSrc, Box: item.Box, Error: cloudErr.Error()}
 			} else {
+				if fallbackReason == "" {
+					fallbackReason = localErr.Error()
+				}
 				modelUsed = cfg.CloudModel
 				results[i] = TranslateSegmentResult{Source: seg, RawSource: rawSrc, Box: item.Box, Translation: cTr, Channel: "cloud"}
 			}
@@ -435,19 +549,27 @@ func (a *App) translateDesktop(w http.ResponseWriter, r *http.Request) {
 			firstErr = rItem.Error
 		}
 	}
-	if !anySuccess && firstErr != "" {
-		logStage("translate.end", "failed", -1)
-		fail(w, 503, firstErr)
-		return
+	if cloudConfirmationRequired {
+		logStage("ocr.privacy_confirmation", "required", -1)
+		logStage("translate.end", "cloud_confirmation_required", -1)
+	} else if !anySuccess && firstErr != "" {
+		if ocrText == "" {
+			logStage("translate.end", "failed", -1)
+			fail(w, 503, firstErr)
+			return
+		}
+		logStage("translate.end", "ocr_only", -1)
+	} else {
+		logStage("translate.end", "success", -1)
 	}
-	logStage("translate.end", "success", -1)
 
 	writeJSON(w, 200, TranslateResponse{
-		Segments:       results,
-		OCRText:        ocrText,
-		OCRRawText:     ocrRawText,
-		OCRMs:          ocrMs,
-		FallbackReason: fallbackReason,
-		ModelUsed:      modelUsed,
+		Segments:                  results,
+		OCRText:                   ocrText,
+		OCRRawText:                ocrRawText,
+		OCRMs:                     ocrMs,
+		FallbackReason:            fallbackReason,
+		ModelUsed:                 modelUsed,
+		CloudConfirmationRequired: cloudConfirmationRequired,
 	})
 }

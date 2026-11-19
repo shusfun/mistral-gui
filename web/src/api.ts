@@ -54,7 +54,8 @@ export function recordUiTrace(
   }
 }
 
-function flushUiTraces() {
+export function flushUiTraces() {
+  clearTimeout(flushTimer);
   flushTimer = undefined;
   const events = bufferedEvents.splice(0);
   if (!events.length) return;
@@ -266,6 +267,7 @@ export async function initDesktopBridge(
     onUpdateChecked?: (payload: { result?: any; error?: string }) => void;
     onScreenshotCaptured?: (payload: {
       image_base64?: string;
+      trace?: string;
       width?: number;
       height?: number;
       error?: string;
@@ -299,10 +301,21 @@ export async function initDesktopBridge(
     handlers.onUpdateChecked?.(data);
   });
 
+  const handleScreenshot = (data: unknown) => {
+    if (!data || typeof data !== "object") return;
+    const { image_base64, trace, error } = data as Record<string, unknown>;
+    handlers.onScreenshotCaptured?.({
+      image_base64: typeof image_base64 === "string" ? image_base64 : undefined,
+      trace:
+        typeof trace === "string" && /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/.test(trace)
+          ? trace
+          : undefined,
+      error: typeof error === "string" ? error : undefined,
+    });
+  };
   rt.Events?.On?.("desktop:screenshot-captured", (event: any) => {
-    const data = event?.data || event || {};
-    handlers.onScreenshotCaptured?.(data);
+    handleScreenshot(event?.data || event);
   });
 
-  await nativeCommand("ready").catch(() => {});
+  await nativeCommand<unknown>("ready").then(handleScreenshot).catch(() => {});
 }

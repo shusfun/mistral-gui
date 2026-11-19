@@ -38,7 +38,9 @@ type Service struct {
 	notified          map[string]bool
 	notificationOrder []string
 	confirmations     map[string]chan bool
-	lastScreenshot    map[string]any
+	pendingScreenshot map[string]any
+	captureMu         sync.Mutex
+	imagePreview      imagePreviewState
 }
 
 func (s *Service) RefreshMenus() {
@@ -56,37 +58,64 @@ func (s *Service) text(zh, en string) string {
 func (s *Service) Show()       { s.window.Show(); s.window.Restore(); s.window.Focus() }
 func (s *Service) Ready() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.ready }
 
-func (s *Service) captureAndStore(hideWindowFirst bool) (map[string]any, error) {
-	if hideWindowFirst && s.window != nil {
+func desktopTrace() string {
+	var ids [24]byte
+	if _, err := rand.Read(ids[:]); err != nil {
+		return ""
+	}
+	return "00-" + hex.EncodeToString(ids[:16]) + "-" + hex.EncodeToString(ids[16:]) + "-01"
+}
+
+func (s *Service) captureScreenshot(trace string) (map[string]any, error) {
+	if !s.captureMu.TryLock() {
+		return nil, errors.New("screenshot_in_progress")
+	}
+	defer s.captureMu.Unlock()
+	if s.window != nil {
 		s.window.Hide()
+		s.manager.NativeTrace("screenshot.window.hidden", trace)
+		defer func() {
+			s.Show()
+			s.manager.NativeTrace("screenshot.window.restored", trace)
+		}()
 		time.Sleep(150 * time.Millisecond)
 	}
 	dataURL, width, height, err := captureVirtualScreenPNG()
-	if hideWindowFirst && s.window != nil {
-		s.Show()
-	}
 	if err != nil {
+		s.manager.NativeTrace("screenshot.capture.failed", trace)
 		return nil, err
 	}
-	shot := map[string]any{
+	s.manager.NativeTrace("screenshot.capture.success", trace)
+	return map[string]any{
 		"image_base64": dataURL,
 		"width":        width,
 		"height":       height,
 		"captured_at":  time.Now().UTC().Format(time.RFC3339),
-	}
-	s.mu.Lock()
-	s.lastScreenshot = shot
-	s.mu.Unlock()
-	return shot, nil
+		"trace":        trace,
+	}, nil
 }
-func (s *Service) Command(kind, value, trace string) (any, error) {
+
+func (s *Service) deliverScreenshot(shot map[string]any) {
+	s.mu.Lock()
+	if !s.ready {
+		s.pendingScreenshot = shot
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+	s.host.Event.Emit("desktop:screenshot-captured", shot)
+}
+
+func (s *Service) Command(ctx context.Context, kind, value, trace string) (any, error) {
 	s.manager.NativeTrace(kind, trace)
 	switch kind {
 	case "ready":
 		s.mu.Lock()
 		s.ready = true
+		shot := s.pendingScreenshot
+		s.pendingScreenshot = nil
 		s.mu.Unlock()
-		return true, nil
+		return shot, nil
 	case "confirm-result":
 		var reply struct {
 			ID       string `json:"id"`
@@ -142,13 +171,11 @@ func (s *Service) Command(kind, value, trace string) (any, error) {
 	case "update":
 		return s.manager.DesktopUpdate(trace), nil
 	case "capture-screen":
-		return s.captureAndStore(true)
-	case "consume-screenshot":
-		s.mu.Lock()
-		shot := s.lastScreenshot
-		s.lastScreenshot = nil
-		s.mu.Unlock()
-		return shot, nil
+		return s.captureScreenshot(trace)
+	case "open-image-preview":
+		return nil, s.openImagePreview(ctx, value, trace)
+	case "read-image-preview":
+		return s.readImagePreview(ctx)
 	case "quit":
 		s.manager.Close()
 		s.host.Quit()
@@ -159,9 +186,16 @@ func (s *Service) Command(kind, value, trace string) (any, error) {
 }
 func Run(manager *app.App, hidden bool) error {
 	s := &Service{manager: manager, notifier: notifications.New(), notified: map[string]bool{}, confirmations: map[string]chan bool{}}
-	s.host = application.New(application.Options{Name: "mistral", Icon: branding.Logo, Description: "Local model manager", Services: []application.Service{application.NewService(s), application.NewService(s.notifier)}, Assets: application.AssetOptions{Handler: manager.DesktopHandler()}, Mac: application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: false}, OnShutdown: manager.Close})
+	s.host = application.New(application.Options{Name: "mistral", Icon: branding.Logo, Description: "Local model manager", Services: []application.Service{application.NewService(s), application.NewService(s.notifier)}, Assets: application.AssetOptions{Handler: manager.DesktopHandler()}, Mac: application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: false}, OnShutdown: func() {
+		manager.NativeTrace("application.shutdown", desktopTrace())
+		manager.Close()
+	}})
 	s.window = s.host.Window.NewWithOptions(application.WebviewWindowOptions{Title: "mistral", Width: 1121, Height: 821, MinWidth: 861, MinHeight: 621, Frameless: runtime.GOOS != "darwin", Windows: application.WindowsWindow{NonClientRegionSupport: true, WebView2CompositionHosting: true}, Mac: application.MacWindow{TitleBar: application.MacTitleBarHidden, InvisibleTitleBarHeight: 47}, URL: "/manage?desktop=1", Hidden: hidden})
-	s.window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) { s.window.Hide(); e.Cancel() })
+	s.window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		manager.NativeTrace("window.close_to_tray", desktopTrace())
+		s.window.Hide()
+		e.Cancel()
+	})
 	s.host.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(e *application.ApplicationEvent) { s.Show() })
 	tray := s.host.SystemTray.New()
 	tray.SetTooltip("mistral")
@@ -171,14 +205,13 @@ func Run(manager *app.App, hidden bool) error {
 		tray.SetIcon(branding.TrayDark).SetDarkModeIcon(branding.TrayLight)
 	}
 	triggerScreenshot := func() {
-		shot, err := s.captureAndStore(true)
-		s.Show()
-		s.window.SetURL("/manage?desktop=1#translate")
+		trace := desktopTrace()
+		shot, err := s.captureScreenshot(trace)
 		if err != nil {
-			s.host.Event.Emit("desktop:screenshot-captured", map[string]any{"error": err.Error()})
+			s.deliverScreenshot(map[string]any{"error": err.Error(), "trace": trace})
 			return
 		}
-		s.host.Event.Emit("desktop:screenshot-captured", shot)
+		s.deliverScreenshot(shot)
 	}
 	buildMenu := func() *application.Menu {
 		menu := s.host.NewMenu()

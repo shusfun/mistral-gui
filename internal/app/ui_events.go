@@ -22,7 +22,14 @@ func (a *App) uiEvents(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "invalid_ui_events")
 		return
 	}
-	phases := map[string]bool{"ui.start": true, "ui.end": true, "ui.result": true, "request.start": true, "request.end": true, "request.failed": true, "native.start": true, "native.end": true}
+	phases := map[string]bool{
+		"ui.start": true, "ui.end": true, "ui.result": true,
+		"request.start": true, "request.end": true, "request.failed": true,
+		"native.start": true, "native.end": true,
+		"image.load": true, "image.decode": true, "translation.render": true,
+		"translation.automatic": true, "translation.manual": true,
+		"image.preview.render": true,
+	}
 	outcomes := map[string]bool{"started": true, "success": true, "failed": true, "cancelled": true}
 	for _, e := range body.Events {
 		if !validTraceparent(e.Traceparent) || !phases[e.Phase] || !outcomes[e.Outcome] || e.DurationMS < 0 || e.DurationMS > 86400000 {

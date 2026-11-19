@@ -286,6 +286,10 @@ func (a *App) ensureEngine(ctx context.Context, trace string) error {
 		a.mu.Unlock()
 	}
 	a.lifecycle.Lock()
+	if err := ctx.Err(); err != nil {
+		a.lifecycle.Unlock()
+		return err
+	}
 	select {
 	case <-a.closed:
 		a.lifecycle.Unlock()
@@ -368,7 +372,13 @@ func (a *App) ensureEngine(ctx context.Context, trace string) error {
 		a.mu.Unlock()
 
 		// Coordinate concurrent deployments and GPU VRAM headroom before spawning process (M-R4).
+		resourceStarted := time.Now()
 		a.coordinateResourcesBeforeStart(ctx, a, backend, in, tuning)
+		slog.Info("runtime.resource_check", "traceId", traceRoot(trace), "deployment", a.canonicalID(), "durationMs", time.Since(resourceStarted).Milliseconds())
+		if err := ctx.Err(); err != nil {
+			a.lifecycle.Unlock()
+			return err
+		}
 
 		port, err := freePort()
 		if err != nil {
@@ -436,6 +446,7 @@ func (a *App) ensureEngine(ctx context.Context, trace string) error {
 		}
 		output := startupOutput{app: a, process: p}
 		cmd.Stdout, cmd.Stderr = output, output
+		launchStarted := time.Now()
 		if err = cmd.Start(); err != nil {
 			a.mu.Lock()
 			a.recordEngineFailureLocked("engine_start_failed", err.Error(), -1, rlog.Tail(8192), true)
@@ -465,7 +476,7 @@ func (a *App) ensureEngine(ctx context.Context, trace string) error {
 		a.state.Detail = ""
 		a.state.UpdatedAt = now
 		a.mu.Unlock()
-		slog.Info("runtime.start", "traceId", traceRoot(trace), "generation", p.generation, "backend", backend, "model", model)
+		slog.Info("runtime.start", "traceId", traceRoot(trace), "generation", p.generation, "backend", backend, "model", model, "durationMs", time.Since(launchStarted).Milliseconds())
 		go func() {
 			defer release()
 			err := cmd.Wait()
@@ -526,16 +537,21 @@ func (a *App) ensureEngine(ctx context.Context, trace string) error {
 }
 
 func (a *App) readiness(p *engineProcess, trace string) {
+	started := time.Now()
 	timer := time.NewTimer(5 * time.Minute)
 	defer timer.Stop()
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+	fastProbe := time.NewTimer(5 * time.Second)
+	defer fastProbe.Stop()
 	c := http.Client{Timeout: 2 * time.Second}
 	polls := 0
 	for {
 		select {
 		case <-p.done:
 			return
+		case <-fastProbe.C:
+			ticker.Reset(500 * time.Millisecond)
 		case <-timer.C:
 			a.mu.Lock()
 			if a.engine == p {
@@ -580,7 +596,7 @@ func (a *App) readiness(p *engineProcess, trace string) {
 				default:
 				}
 				a.mu.Lock()
-				if a.engine == p && p.cmd.ProcessState == nil {
+				if a.engine == p && a.state.State == "loading" {
 					p.modelID = models.Data[0].ID
 					p.startupLog = ""
 					a.state.State = "running"
@@ -605,9 +621,9 @@ func (a *App) readiness(p *engineProcess, trace string) {
 							a.mu.Unlock()
 						}
 					}()
+					slog.Info("runtime.ready", "traceId", traceRoot(trace), "generation", p.generation, "durationMs", time.Since(started).Milliseconds(), "polls", polls)
 				}
 				a.mu.Unlock()
-				slog.Info("runtime.ready", "traceId", traceRoot(trace), "generation", p.generation)
 				return
 			}
 		}

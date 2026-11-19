@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-var Version = "0.1.0-dev"
+var Version = "0.1.1-dev"
 var UpdateRepository = ""
 var SupplementRepository = ""
 var SupplementTagPrefix = "runtime-"

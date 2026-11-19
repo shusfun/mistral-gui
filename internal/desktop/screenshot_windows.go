@@ -88,8 +88,8 @@ func captureVirtualScreenPNG() (string, int, int, error) {
 		width = 1920
 		height = 1080
 	}
-	if width > 16384 || height > 16384 {
-		return "", 0, 0, errors.New("ocr_failed")
+	if int64(width)*int64(height) > 32*1024*1024 {
+		return "", 0, 0, errors.New("ocr_image_too_large")
 	}
 
 	hdcScreen, _, _ := procGetDC.Call(0)
@@ -158,6 +158,9 @@ func captureVirtualScreenPNG() (string, int, int, error) {
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
 		return "", 0, 0, errors.New("ocr_failed")
+	}
+	if buf.Len() > 16*1024*1024 {
+		return "", 0, 0, errors.New("ocr_image_too_large")
 	}
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes()), width, height, nil
 }

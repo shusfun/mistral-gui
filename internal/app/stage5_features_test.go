@@ -208,10 +208,10 @@ func main() {
 	h := a.Handler()
 	samplePNG := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nmock"))
 
-	// 1. Without CloudImageConfirmed in local-first mode, returns 409 cloud_image_confirmation_required
 	req1, _ := json.Marshal(map[string]any{
 		"image_base64": samplePNG,
 		"routing":      "local-first",
+		"ready_only":   true,
 	})
 	r1 := httptest.NewRequest("POST", "http://127.0.0.1:19820/api/v1/translate", bytes.NewReader(req1))
 	r1.Host = "127.0.0.1:19820"
@@ -219,13 +219,13 @@ func main() {
 	w1 := httptest.NewRecorder()
 	h.ServeHTTP(w1, r1)
 	if w1.Code != 409 {
-		t.Fatalf("expected 409 cloud_image_confirmation_required, got %d: %s", w1.Code, w1.Body.String())
+		t.Fatalf("expected 409 translation_model_not_ready, got %d: %s", w1.Code, w1.Body.String())
 	}
 
-	// 2. In local-only mode (or with confirm_cloud_image: true), OCR runs & translates cleanly!
 	req2, _ := json.Marshal(map[string]any{
-		"image_base64": samplePNG,
-		"routing":      "local-only",
+		"image_base64":        samplePNG,
+		"routing":             "local-first",
+		"confirm_cloud_image": true,
 	})
 	r2 := httptest.NewRequest("POST", "http://127.0.0.1:19820/api/v1/translate", bytes.NewReader(req2))
 	r2.Host = "127.0.0.1:19820"
@@ -242,8 +242,94 @@ func main() {
 	if out.OCRText != "Mock OCR Line" || len(out.Segments) != 1 || out.Segments[0].Translation != "模拟图片识别译文" {
 		t.Fatalf("unexpected OCR translation output: %+v", out)
 	}
+	if a.config.CloudImageConfirmed || out.CloudConfirmationRequired {
+		t.Fatal("dictionary-only translation must not request or persist cloud consent")
+	}
 
-	// 3. Delete OCR stops worker and cleans directory
+	unavailableEngine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer unavailableEngine.Close()
+	a.mu.Lock()
+	a.config.AutoStart = false
+	a.mu.Unlock()
+	a.dictionary.mu.Lock()
+	delete(a.dictionary.data.Revisions, dictRevKey("Mock OCR Line", "auto", "zh-CN"))
+	a.dictionary.mu.Unlock()
+	ocrOnly := httptest.NewRequest("POST", "http://127.0.0.1:19820/api/v1/translate", bytes.NewReader(req2))
+	ocrOnly.Header.Set("Authorization", "Bearer "+a.token())
+	ocrOnlyResult := httptest.NewRecorder()
+	h.ServeHTTP(ocrOnlyResult, ocrOnly)
+	var partial TranslateResponse
+	if err := json.Unmarshal(ocrOnlyResult.Body.Bytes(), &partial); err != nil {
+		t.Fatal(err)
+	}
+	if ocrOnlyResult.Code != 200 || partial.OCRText != "Mock OCR Line" || len(partial.Segments) != 1 || partial.Segments[0].Error != "runtime_stopped" || partial.FallbackReason != "" {
+		t.Fatalf("expected OCR text and local failure without a cloud fallback, got %d %+v", ocrOnlyResult.Code, partial)
+	}
+	if _, err := a.callChatModelSingle(ocrOnly.Context(), unavailableEngine.URL, "", "test", "test", "Mock OCR Line", "zh-CN", ""); err == nil || err.Error() != "engine_inference_failed" {
+		t.Fatalf("expected local engine inference failure, got %v", err)
+	}
+
+	var cloudHits atomic.Int32
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cloudHits.Add(1)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"云端翻译结果"}}]}`))
+	}))
+	defer cloud.Close()
+	a.mu.Lock()
+	a.config.CloudAPIURL = cloud.URL
+	a.config.CloudAPIKey = "test-key"
+	a.config.CloudModel = "test-model"
+	a.mu.Unlock()
+	for _, routing := range []string{"local-first", "cloud-only"} {
+		blocked := request(t, a, "POST", "/api/v1/translate", `{"text":"Fresh text","ready_only":true,"routing":"`+routing+`"}`, true)
+		if blocked.Code != 409 || !bytes.Contains(blocked.Body.Bytes(), []byte("translation_model_not_ready")) || cloudHits.Load() != 0 {
+			t.Fatalf("automatic %s request should require a ready local deployment: %d %s", routing, blocked.Code, blocked.Body.String())
+		}
+	}
+	local := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"本地翻译结果"}}]}`))
+	}))
+	defer local.Close()
+	process := &engineProcess{ready: make(chan struct{}), target: local.URL, modelID: "test-local"}
+	close(process.ready)
+	a.mu.Lock()
+	a.engine = process
+	a.state.State = "running"
+	a.mu.Unlock()
+	ready := request(t, a, "POST", "/api/v1/translate", string(req1), true)
+	a.mu.Lock()
+	a.engine = nil
+	a.state.State = "stopped"
+	active := a.state.Active
+	a.mu.Unlock()
+	if ready.Code != 200 || !bytes.Contains(ready.Body.Bytes(), []byte("本地翻译结果")) || cloudHits.Load() != 0 || active != 0 {
+		t.Fatalf("ready-only OCR should use the local model and release its reservation: %d %s, active: %d", ready.Code, ready.Body.String(), active)
+	}
+	withheld := request(t, a, "POST", "/api/v1/translate", `{"image_base64":"`+samplePNG+`","routing":"local-first"}`, true)
+	var pending TranslateResponse
+	if err := json.Unmarshal(withheld.Body.Bytes(), &pending); err != nil {
+		t.Fatal(err)
+	}
+	if withheld.Code != 200 || !pending.CloudConfirmationRequired || pending.OCRText != "Mock OCR Line" || cloudHits.Load() != 0 {
+		t.Fatalf("cloud consent must follow OCR without sending text, got %d %+v, cloud hits: %d", withheld.Code, pending, cloudHits.Load())
+	}
+	a.dictionary.mu.Lock()
+	a.dictionary.data.Revisions[dictRevKey("Known paragraph.", "auto", "zh-CN")] = SyncedRevision{Source: "Known paragraph.", Translation: "词库译文", SourceLang: "auto", TargetLang: "zh-CN"}
+	a.dictionary.mu.Unlock()
+	edited := request(t, a, "POST", "/api/v1/translate", `{"text":"Known paragraph.\n\nNew paragraph.","ocr_derived":true,"routing":"local-first"}`, true)
+	var editedPending TranslateResponse
+	if err := json.Unmarshal(edited.Body.Bytes(), &editedPending); err != nil {
+		t.Fatal(err)
+	}
+	if edited.Code != 200 || !editedPending.CloudConfirmationRequired || len(editedPending.Segments) != 2 || editedPending.Segments[0].Translation != "词库译文" || cloudHits.Load() != 0 {
+		t.Fatalf("edited OCR should retain partial translations while waiting for consent: %d %+v", edited.Code, editedPending)
+	}
+	confirmed := request(t, a, "POST", "/api/v1/translate", string(req2), true)
+	if confirmed.Code != 200 || cloudHits.Load() != 1 || !a.config.CloudImageConfirmed {
+		t.Fatalf("expected one authorized fallback, got %d %s, cloud hits: %d", confirmed.Code, confirmed.Body.String(), cloudHits.Load())
+	}
 	sup.customExecPath = ""
 	if err := sup.Delete(); err != nil {
 		t.Fatal(err)

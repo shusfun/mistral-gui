@@ -188,7 +188,7 @@ jobs:
         run: |
           gh release view $env:VERSION --json tagName *> $null
           if ($LASTEXITCODE -eq 0) { Write-Output 'Existing release retained for verified replacement.'; exit 0 }
-          gh release create $env:VERSION --verify-tag --generate-notes (Get-ChildItem dist -File | ForEach-Object FullName)
+          gh release create $env:VERSION --verify-tag --generate-notes --latest (Get-ChildItem dist -File | ForEach-Object FullName)
       - uses: actions/upload-artifact@v4
         with:
           name: manager-release-complete

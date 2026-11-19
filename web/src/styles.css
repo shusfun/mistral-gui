@@ -438,40 +438,86 @@ section.panel.mg-section {
   text-align: center;
 }
 
-/* Image / Screenshot Stage + Adjacent Floating Paragraph Comparison */
+.mg-main.wide:has(.mg-image-translate) {
+  height: 100%;
+  padding-block-end: var(--space-4);
+}
+
+.mg-main.wide > .page-enter:has(.mg-image-translate),
+section.mg-image-translate {
+  height: 100%;
+}
+
+section.mg-image-translate {
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+}
+
+.mg-image-translate .mg-translator-bar {
+  flex: none;
+}
+
 .mg-image-workbench {
+  --mg-image-min-stage: 113px;
+  --mg-image-min-panel: 101px;
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.95fr);
-  gap: 14px;
-  align-items: start;
-  margin-bottom: 14px;
+  grid-template-rows:
+    minmax(
+      calc(var(--mg-image-min-stage) + var(--control-height) + var(--space-5)),
+      3fr
+    )
+    repeat(2, minmax(var(--mg-image-min-panel), 1fr));
+  gap: var(--space-3);
+  flex: 1;
+  min-height: calc(
+    var(--mg-image-min-stage) + var(--control-height) + var(--space-5) + 2 *
+      (var(--mg-image-min-panel) + var(--space-3))
+  );
 }
 
-.mg-image-workbench.single {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.mg-crop-card {
+.mg-image-preview,
+.mg-image-text-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
   background: var(--color-panel);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
   overflow: hidden;
 }
 
+.mg-image-workbench .mg-studio-head {
+  flex: none;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+}
+
+.mg-image-workbench h2 {
+  margin: 0;
+  font-size: var(--font-sm);
+}
+
+.mg-image-actions.actions {
+  margin: 0;
+}
+
 .mg-crop-stage-wrap {
-  padding: 12px;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--space-2);
+  container-type: size;
   background: var(--color-sunken);
-  display: flex;
-  justify-content: center;
 }
 
 .mg-crop-stage {
   position: relative;
-  display: inline-block;
-  max-width: 100%;
-  border-radius: 6px;
-  border: 1px solid var(--color-border-strong);
+  width: min(100cqw, calc(100cqh * var(--mg-image-ratio)));
+  aspect-ratio: var(--mg-image-ratio);
   overflow: hidden;
   cursor: crosshair;
   user-select: none;
@@ -479,45 +525,153 @@ section.panel.mg-section {
 }
 
 .mg-crop-stage img {
-  display: block;
-  max-width: 100%;
-  max-height: 440px;
-  height: auto;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
 }
 
 .mg-crop-rect {
   position: absolute;
-  border: 2px solid var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.36);
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
   pointer-events: none;
 }
 
 .mg-image-overlay-box {
   position: absolute;
-  background: color-mix(in srgb, var(--color-panel) 94%, transparent);
-  backdrop-filter: blur(4px);
+  display: grid;
+  align-content: center;
+  background: var(--color-panel);
   color: var(--color-text);
-  border: 1px solid var(--color-border-strong);
-  border-radius: 5px;
-  padding: 3px 6px;
-  font-size: 12px;
-  line-height: 1.35;
-  overflow: auto;
-  box-shadow: var(--shadow-sm);
-  pointer-events: auto;
+  font-size: calc(var(--font-xs) * var(--mg-overlay-reference-scale, 1));
+  line-height: 1.1;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  pointer-events: none;
 }
 
-.mg-float-card {
+.mg-image-overlay-box span {
+  min-inline-size: 0;
+}
+
+.mg-viewer {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100dvh;
+  overflow: hidden;
   background: var(--color-panel);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--material-shadow-strong);
+}
+
+.mg-viewer-toolbar,
+.mg-viewer-zoom {
   display: flex;
-  flex-direction: column;
-  max-height: 500px;
-  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.mg-viewer-toolbar {
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  border-block-end: 1px solid var(--color-border);
+}
+
+.mg-viewer-zoom output {
+  min-inline-size: 4ch;
+  color: var(--color-muted);
+  font-size: var(--font-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.mg-preview-icon-button svg {
+  transition: transform var(--motion-fast) var(--ease-out);
+}
+
+.mg-preview-icon-button:not(:disabled):is(:hover, :focus-visible) svg {
+  transform: scale(1.14);
+}
+
+.mg-preview-icon-button:not(:disabled):active svg {
+  transform: scale(0.91);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mg-preview-icon-button svg {
+    transition: none;
+    transform: none !important;
+  }
+}
+
+.mg-viewer-viewport {
+  position: relative;
+  min-inline-size: 0;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  background: var(--color-sunken);
+}
+
+.mg-viewer-viewport[data-pan="available"] {
+  cursor: grab;
+}
+
+.mg-viewer-viewport[data-pan="dragging"] {
+  cursor: grabbing;
+}
+
+.mg-viewer-image {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.mg-viewer-image img {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+.mg-viewer-message {
+  display: grid;
+  place-items: center;
+  height: 100dvh;
+  color: var(--color-muted);
+  background: var(--color-sunken);
+}
+
+.mg-image-translation-text,
+textarea.mg-image-source-text {
+  flex: 1;
+  min-height: 0;
+  padding: var(--space-2) var(--space-4);
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: var(--font-sm);
+  line-height: var(--line-height);
+}
+
+.mg-image-translation-text > .feedback-banner {
+  white-space: normal;
+}
+
+textarea.mg-image-source-text {
+  resize: none;
+  border: 0;
+  border-radius: 0;
+  background: var(--color-panel);
+}
+
+textarea.mg-image-source-text:focus-visible,
+.mg-image-translation-text:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
 }
 
 .mg-float-body {
@@ -562,7 +716,6 @@ section.panel.mg-section {
 }
 
 @media (max-width: 920px) {
-  .mg-image-workbench,
   .mg-studio-card {
     grid-template-columns: 1fr;
   }

@@ -3,6 +3,7 @@ import {
   Badge,
   Button,
   ConfirmHost,
+  FloatingFeedback,
   IconBox,
   IconCpu,
   IconLayoutGrid,
@@ -99,7 +100,7 @@ export function App() {
     result?: UpdateCheckView;
     error?: string;
   } | null>(null);
-  const [pendingScreenshot, setPendingScreenshot] = useState<string | null>(
+  const [pendingScreenshot, setPendingScreenshot] = useState<{ src: string; trace?: string } | null>(
     null,
   );
 
@@ -250,7 +251,7 @@ export function App() {
           },
           onScreenshotCaptured: (payload) => {
             if (payload.image_base64) {
-              setPendingScreenshot(payload.image_base64);
+              setPendingScreenshot({ src: payload.image_base64, trace: payload.trace });
               navigateHash("#translate");
             } else if (payload.error) {
               toast(
@@ -376,7 +377,7 @@ export function App() {
   ];
 
   return (
-    <>
+    <FloatingFeedback>
       <Titlebar locale={locale} platform={data?.platform || ""} />
 
       <div class="mg-shell">
@@ -598,6 +599,6 @@ export function App() {
 
       <ConfirmHost lang={uiLang} />
       <ToastViewport />
-    </>
+    </FloatingFeedback>
   );
 }

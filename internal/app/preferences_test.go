@@ -74,6 +74,13 @@ func TestUIEventsRequireAuthValidateAndPreserveHTTPTrace(t *testing.T) {
 		status     int
 	}{
 		{`{"events":[` + event + `]}`, true, 200},
+		{`{"events":[` + strings.Join([]string{
+			event,
+			strings.Replace(event, "ui.end", "image.load", 1),
+			strings.Replace(event, "ui.end", "image.decode", 1),
+			strings.Replace(event, "ui.end", "translation.render", 1),
+			strings.Replace(event, "ui.end", "image.preview.render", 1),
+		}, ",") + `]}`, true, 200},
 		{`{"events":[` + event + `]}`, false, 401},
 		{`{"events":[` + strings.Replace(event, "ui.end", "raw.secret", 1) + `]}`, true, 400},
 		{`{"events":[` + strings.Replace(event, trace, "invalid", 1) + `]}`, true, 400},

@@ -236,6 +236,7 @@ export interface TranslateSegment {
 
 export interface DesktopTranslateResponse {
   segments: TranslateSegment[];
+  cloud_confirmation_required?: boolean;
   ocr_text?: string;
   ocr_raw_text?: string;
   ocr_ms?: number;
