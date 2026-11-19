@@ -25,13 +25,17 @@ type Asset struct {
 	SHA256 string `json:"sha256"`
 	Size   int64  `json:"size"`
 }
+
+const ReleaseEpoch = 1
+
 type Manifest struct {
-	Version     string  `json:"version"`
-	MinVersion  string  `json:"min_version,omitempty"`
-	PublishedAt string  `json:"published_at,omitempty"`
-	ExpiresAt   string  `json:"expires_at,omitempty"`
-	Notes       string  `json:"notes"`
-	Assets      []Asset `json:"assets"`
+	Version      string  `json:"version"`
+	ReleaseEpoch int     `json:"release_epoch,omitempty"`
+	MinVersion   string  `json:"min_version,omitempty"`
+	PublishedAt  string  `json:"published_at,omitempty"`
+	ExpiresAt    string  `json:"expires_at,omitempty"`
+	Notes        string  `json:"notes"`
+	Assets       []Asset `json:"assets"`
 }
 
 func IsNewer(current, next string) bool {

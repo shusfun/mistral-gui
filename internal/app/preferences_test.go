@@ -11,7 +11,39 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/shusfun/mistral-gui/internal/update"
 )
+
+func TestUpdateReleaseEpochPreservesReplayProtection(t *testing.T) {
+	manager, err := New("127.0.0.1:19820", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	manager.config.HighestSeenVersion = "v0.3.1"
+	ctx := update.WithTrace(context.Background(), "", nil)
+	for _, step := range []struct {
+		version   string
+		epoch     int
+		wantError string
+	}{
+		{"v0.3.1", 0, "update_release_epoch_mismatch"},
+		{"v0.1.1", update.ReleaseEpoch, ""},
+		{"v0.1.2", update.ReleaseEpoch, ""},
+		{"v0.1.1", update.ReleaseEpoch, "manifest_replay_rejected"},
+		{"v0.3.1", 0, "update_release_epoch_mismatch"},
+	} {
+		err := manager.acceptVerifiedUpdateManifest(ctx, update.Manifest{Version: step.version, ReleaseEpoch: step.epoch})
+		if (err == nil && step.wantError != "") || (err != nil && err.Error() != step.wantError) {
+			t.Fatalf("manifest %s, epoch %d: error %v, want %q", step.version, step.epoch, err, step.wantError)
+		}
+	}
+	state, err := loadPersistedFile(manager.statePath)
+	if err != nil || state.Config.HighestSeenVersion != "v0.1.2" || state.Config.UpdateReleaseEpoch != update.ReleaseEpoch {
+		t.Fatalf("update watermark was not persisted: version %s, epoch %d, error %v", state.Config.HighestSeenVersion, state.Config.UpdateReleaseEpoch, err)
+	}
+}
 
 func TestThemePreservesRunningEngineAndExistingData(t *testing.T) {
 	a := fixtureApp(t)

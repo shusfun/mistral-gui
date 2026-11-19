@@ -133,9 +133,10 @@ func manifest(dir, version, repo string) error {
 	}
 	now := time.Now().UTC()
 	m := update.Manifest{
-		Version:     version,
-		PublishedAt: now.Format(time.RFC3339),
-		ExpiresAt:   now.AddDate(1, 0, 0).Format(time.RFC3339),
+		Version:      version,
+		ReleaseEpoch: update.ReleaseEpoch,
+		PublishedAt:  now.Format(time.RFC3339),
+		ExpiresAt:    now.AddDate(1, 0, 0).Format(time.RFC3339),
 	}
 	var sums []string
 	targets := []struct{ os, arch, install, asset string }{

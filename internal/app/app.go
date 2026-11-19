@@ -57,6 +57,7 @@ type Config struct {
 	AllowedExtensions     []string     `json:"allowed_extensions,omitempty"`
 	MaxRunningDeployments int          `json:"max_running_deployments,omitempty"`
 	HighestSeenVersion    string       `json:"highest_seen_version,omitempty"`
+	UpdateReleaseEpoch    int          `json:"update_release_epoch,omitempty"`
 	CloudAPIURL           string       `json:"cloud_api_url,omitempty"`
 	CloudAPIKey           string       `json:"cloud_api_key,omitempty"`
 	CloudModel            string       `json:"cloud_model,omitempty"`

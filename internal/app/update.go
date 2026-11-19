@@ -41,24 +41,38 @@ func (a *App) UpdateManifest(ctx context.Context) (update.Manifest, error) {
 	if err != nil {
 		return m, err
 	}
-	// Anti-replay watermark: reject signed manifests older than any version already observed (M-S21).
+	if err := a.acceptVerifiedUpdateManifest(ctx, m); err != nil {
+		return update.Manifest{}, err
+	}
+	return m, nil
+}
+
+func (a *App) acceptVerifiedUpdateManifest(ctx context.Context, m update.Manifest) error {
+	if m.ReleaseEpoch != update.ReleaseEpoch {
+		return fmt.Errorf("update_release_epoch_mismatch")
+	}
 	a.mu.Lock()
 	highest := a.config.HighestSeenVersion
-	if highest != "" && update.IsNewer(m.Version, highest) {
+	previousEpoch := a.config.UpdateReleaseEpoch
+	if previousEpoch > m.ReleaseEpoch || (previousEpoch == m.ReleaseEpoch && highest != "" && update.IsNewer(m.Version, highest)) {
 		a.mu.Unlock()
-		return update.Manifest{}, fmt.Errorf("manifest_replay_rejected")
+		return fmt.Errorf("manifest_replay_rejected")
 	}
-	changed := highest == "" || update.IsNewer(highest, m.Version)
+	changed := previousEpoch < m.ReleaseEpoch || highest == "" || update.IsNewer(highest, m.Version)
 	if changed {
+		a.config.UpdateReleaseEpoch = m.ReleaseEpoch
 		a.config.HighestSeenVersion = m.Version
 	}
 	a.mu.Unlock()
 	if changed {
 		if err := a.save(); err != nil {
-			return update.Manifest{}, err
+			return err
 		}
 	}
-	return m, nil
+	if previousEpoch < m.ReleaseEpoch {
+		update.Phase(ctx, "release_epoch_migrated", UpdateRepository)
+	}
+	return nil
 }
 
 func (a *App) updateCheck(w http.ResponseWriter, r *http.Request) {

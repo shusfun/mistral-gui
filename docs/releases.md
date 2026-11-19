@@ -14,6 +14,8 @@
 
 维护者发版遵循[版本发布规则](decisions/0003-release-versioning.md)。
 
+重设到 `v0.1.1` 时，管理器安装包与签名清单同时切到新的发布代次。既有用户覆盖安装后，首次验证新代次的清单时更新本地版本水位。之后仍按本代次内的最高已见版本防止回退。
+
 推送 `vX.Y.Z` tag 触发 `.github/workflows/release.yml`。Windows x64、Intel Mac、Apple Silicon Mac 原生 runner 分别构建。公开的首次安装包只有 EXE 和两种 DMG。其他资产为机器更新包、`release-manifest.json`、`SHA256SUMS` 及 Ed25519 签名。
 
 仓库变量 `UPDATE_PUBLIC_KEY` 保存 Base64 Ed25519 公钥，Actions secret `UPDATE_SIGNING_KEY` 保存对应的 Base64 64 字节私钥。公钥编译进管理器；私钥仅用于签署发布元数据。私钥不能放到 Git、Release、issue 或聊天中。请将初次生成的密钥在受控存储中备份；密钥丢失会影响已安装客户端的更新信任链。
